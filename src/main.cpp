@@ -10,25 +10,112 @@ struct VulkanExample final : public VulkanExampleBase
     Synchronization sync{};
     DescriptorPool descriptors{};
     GraphicsPass graphicsPass{};
-    
+    Scene scene{};
+    vks::Buffer vertexBuffer, indexBuffer;
+    std::optional<DescriptorSet> modelDescriptors;
+
     VulkanExample()
     {
         title = "Vulkan Meshlets";
         settings.overlay = false;
     }
 
+    ~VulkanExample() 
+    {
+        vertexBuffer.destroy();
+        indexBuffer.destroy();
+    }
+
+    void populateScene() {
+        uint32_t bunnyModel = scene.addModel(getAssetPath() + "bunny.gltf");
+    }
+
+    void uploadScene(const DescriptorSetLayout& modelLayout) {
+        vks::Buffer vertexStaging, indexStaging;
+
+        VkDeviceSize vertexBufferSize = scene.vertices().size() * sizeof(Vertex);
+        VkDeviceSize indexBufferSize = scene.indices().size() * sizeof(uint32_t);
+
+        VK_CHECK_RESULT(vulkanDevice->createBuffer(
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &vertexStaging,
+            vertexBufferSize,
+            scene.vertices().data()
+        ));
+		// Index data
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&indexStaging,
+			indexBufferSize,
+			scene.indices().data()
+        ));
+
+		// Create device local buffers (target)
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&vertexBuffer,
+			vertexBufferSize));
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&indexBuffer,
+			indexBufferSize));
+
+		// Copy data from staging buffers (host) do device local buffer (gpu)
+		VkCommandBuffer copyCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+		VkBufferCopy copyRegion = {};
+
+		copyRegion.size = vertexBufferSize;
+		vkCmdCopyBuffer(
+			copyCmd,
+			vertexStaging.buffer,
+			vertexBuffer.buffer,
+			1,
+			&copyRegion);
+
+		copyRegion.size = indexBufferSize;
+		vkCmdCopyBuffer(
+			copyCmd,
+			indexStaging.buffer,
+			indexBuffer.buffer,
+			1,
+			&copyRegion);
+
+		vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
+
+		vertexStaging.destroy();
+		indexStaging.destroy();
+
+        modelDescriptors = descriptors.allocate(modelLayout);
+        modelDescriptors->write({
+            ResourceHandle::makeBuffer(vertexBuffer.buffer)
+        });
+    }
+
     void prepare() override 
     {
         VulkanExampleBase::prepare();
         sync.prepare(device, maxConcurrentFrames, swapChain.imageCount);
+        const DescriptorSetLayout modelLayout{
+            device,
+            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT}}
+        };
+        descriptors.registerLayout(modelLayout);
+        descriptors.prepare(device);
+
+        populateScene();
+        uploadScene(modelLayout);
+
 
         graphicsPass.prepare(device, {
             loadShader(getShadersPath() + "temp.frag", VK_SHADER_STAGE_FRAGMENT_BIT),
             loadShader(getShadersPath() + "temp.vert", VK_SHADER_STAGE_VERTEX_BIT),
-        }, depthFormat, swapChain.colorFormat);
+        }, depthFormat, swapChain.colorFormat, &modelLayout);
 
-        // add layouts
-        descriptors.prepare(device);
+        
 
         prepared = true;
     }
@@ -56,13 +143,23 @@ struct VulkanExample final : public VulkanExampleBase
         };
 
         // reuse drawCmdBuffers and frameBuffers from VulkanExampleBase - nothing particularly interesting to do with them
-        VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[currentFrame], &beginInfo));
+        auto commandBuffer = drawCmdBuffers[currentFrame];
+        VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginInfo));
         {
-            graphicsPass.beginPass(drawCmdBuffers[currentFrame], frameBuffers[imageIndex], {width, height});
-            graphicsPass.draw(drawCmdBuffers[currentFrame], 3);
-            graphicsPass.endPass(drawCmdBuffers[currentFrame]);
+            auto proj = glm::perspective(
+                glm::radians(45.0f), width / (float) height, 0.1f, 100.0f);
+            proj[1][1] *= -1;
+            
+            glm::mat4 viewProj =proj *
+                glm::lookAt(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+            graphicsPass.beginPass(commandBuffer, frameBuffers[imageIndex], {width, height});
+            vkCmdPushConstants(commandBuffer, graphicsPass.pipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
+            graphicsPass.bind(commandBuffer, *modelDescriptors);
+            graphicsPass.drawIndexed(commandBuffer, indexBuffer.buffer, scene.indices().size());
+            graphicsPass.endPass(commandBuffer);
         }
-        VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[currentFrame]));
+        VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
 
         const VkPipelineStageFlags waitPipelineStage{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 		VkSubmitInfo submitInfo{
@@ -71,7 +168,7 @@ struct VulkanExample final : public VulkanExampleBase
 			.pWaitSemaphores = &sync.presentCompleteSemaphores[currentFrame],
 			.pWaitDstStageMask = &waitPipelineStage,
 			.commandBufferCount = 1,
-			.pCommandBuffers = &drawCmdBuffers[currentFrame],
+			.pCommandBuffers = &commandBuffer,
 			.signalSemaphoreCount = 1,
 			.pSignalSemaphores = &sync.renderToSwapchainImgCompleteSemaphores[imageIndex]
 		};

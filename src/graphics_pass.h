@@ -14,6 +14,10 @@ public:
 
     GraphicsPass(): m_device(VK_NULL_HANDLE), m_pass(VK_NULL_HANDLE), m_pipeline(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE){}
 
+    inline VkPipelineLayout pipelineLayout() const {
+        return m_layout;
+    }
+
     void prepare(
         VkDevice device, 
         // create shaders outside to utilize sample's loader functions and decrease boilerplate
@@ -23,9 +27,12 @@ public:
     ) 
     {
         
+        VkPushConstantRange pushConstantRange = vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4), 0);
+
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{ 
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			.pushConstantRangeCount = 0,
+			.pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstantRange
 		};
 
         if (layout) {
@@ -139,13 +146,13 @@ public:
 
 		// Solid rendering pipeline
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCI, nullptr, &m_pipeline));
+        m_device = device;
     }
 
     void beginPass(
         VkCommandBuffer commandBuffer, 
         VkFramebuffer frameBuffer, 
-        VkExtent2D targetExtent,
-        const DescriptorSet* descriptor = nullptr
+        VkExtent2D targetExtent
     ) 
     {    
         VkClearValue clearValues[2]{};
@@ -181,10 +188,10 @@ public:
             .extent = targetExtent
         };
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+    }
 
-        if (descriptor) {
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, descriptor->set(), 0, nullptr);
-        }
+    void bind(VkCommandBuffer commandBuffer, const DescriptorSet& descriptor, uint32_t set=0) {
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, set, 1, descriptor.set(), 0, nullptr);
     }
 
     void drawIndirect(VkCommandBuffer commandBuffer, VkBuffer drawBuffer, uint32_t count=1) {
@@ -193,6 +200,13 @@ public:
 
     // for debugging purposes
     void draw(VkCommandBuffer commandBuffer, uint32_t count) {
+        vkCmdDraw(commandBuffer, count, 1, 0, 0);
+    }
+
+    void drawIndexed(VkCommandBuffer commandBuffer, VkBuffer indexBuffer, uint32_t count) 
+    {    
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VkIndexType::VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(commandBuffer, count, 1, 0, 0, 0);
         vkCmdDraw(commandBuffer, count, 1, 0, 0);
     }
 

@@ -3,6 +3,7 @@ project(VulkanMeshlets LANGUAGES CXX)
 
 find_package(Vulkan REQUIRED)
 add_subdirectory(base)
+add_subdirectory(external/meshoptimizer EXCLUDE_FROM_ALL)
 
 target_compile_features(base PUBLIC cxx_std_20)
 target_compile_definitions(base
@@ -22,14 +23,16 @@ target_include_directories(base
 
 add_executable(VulkanMeshlets WIN32
     src/main.cpp
+    src/scene.cpp
+    src/scene.h
 )
 target_include_directories(VulkanMeshlets PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/base"
-    external/meshoptimizer/src
+    external/tinygltf
     external/glm
 )
-target_link_libraries(VulkanMeshlets PRIVATE base)
+target_link_libraries(VulkanMeshlets PRIVATE base meshoptimizer)
 
 add_custom_target(VulkanMeshletsShaders
     COMMAND "${CMAKE_COMMAND}"

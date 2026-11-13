@@ -88,7 +88,8 @@ public:
             .pBindings = bindings.data()
         };
         
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_impl->m_device, &layoutInfo, nullptr, &m_impl->m_layout));
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_impl->m_layout));
+        m_impl->m_device = device;
     }
 
     inline const VkDescriptorSetLayout* layout() const {
