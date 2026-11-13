@@ -1,0 +1,194 @@
+#pragma once
+#include <vulkan/vulkan.h>
+#include <vector>
+#include <initializer_list>
+#include "VulkanTools.h"
+#include "resources.h"
+#include <memory>
+
+void addDescriptorBinding(std::vector<VkDescriptorPoolSize>& sizes, VkDescriptorPoolSize currentSize) {
+    bool found = false;
+    for (size_t i = 0; i < sizes.size(); i++) {
+        if (sizes[i].type == currentSize.type) {
+            sizes[i].descriptorCount += currentSize.descriptorCount;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        sizes.push_back(currentSize);
+    }
+}
+
+struct SingleBinding {
+    VkDescriptorType type;
+    VkShaderStageFlags stage;
+};
+
+class DescriptorSetLayout {
+
+    struct Impl {
+        VkDevice m_device{VK_NULL_HANDLE};
+        VkDescriptorSetLayout m_layout;
+        std::vector<VkDescriptorPoolSize> m_sizes{};
+
+        Impl(): m_device(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE), m_sizes(){}
+
+        Impl(const Impl&) = delete;
+        Impl& operator=(const Impl&) = delete;
+        
+        Impl(Impl&& other) noexcept {
+            *this = std::move(other);
+        }
+
+        Impl& operator=(Impl&& other) noexcept {
+            if (this != &other) {
+                m_device = other.m_device;
+                m_layout = other.m_layout;
+                m_sizes = std::move(other.m_sizes);
+                other.m_layout = VK_NULL_HANDLE;
+                other.m_device = VK_NULL_HANDLE;
+            }
+
+            return *this;
+        }
+
+        ~Impl() {
+            if (m_device != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(m_device, m_layout, nullptr);
+                m_device = VK_NULL_HANDLE;
+                m_layout = VK_NULL_HANDLE;
+            }
+        }
+    };
+
+    std::shared_ptr<Impl> m_impl; 
+
+public:
+    DescriptorSetLayout(VkDevice device, std::initializer_list<SingleBinding> sizes): m_impl(std::make_shared<Impl>()) {
+
+        uint32_t bindingOffset = 0;
+        std::vector<VkDescriptorSetLayoutBinding> bindings{};
+
+        for (SingleBinding binding: sizes) {
+            addDescriptorBinding(m_impl->m_sizes, {binding.type, 1});
+
+            bindings.push_back(VkDescriptorSetLayoutBinding {
+                .binding = bindingOffset++,
+                .descriptorType = binding.type,
+                .descriptorCount = 1,
+                .stageFlags = binding.stage
+            });
+        }
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.data()
+        };
+        
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_impl->m_device, &layoutInfo, nullptr, &m_impl->m_layout));
+    }
+
+    inline const VkDescriptorSetLayout* layout() const {
+        return &m_impl->m_layout;
+    }
+
+    friend class DescriptorPool;
+    friend class DescriptorSet;
+};
+
+class DescriptorSet {
+    std::shared_ptr<DescriptorSetLayout::Impl> m_layout;
+    VkDescriptorSet m_set;
+
+    DescriptorSet(VkDescriptorSet set, std::shared_ptr<DescriptorSetLayout::Impl> layout): m_set(set), m_layout(layout){}
+
+public:
+    void write(std::initializer_list<ResourceHandle> resources) {
+        assert(m_layout->m_sizes.size() == resources.size());
+
+        std::vector<VkWriteDescriptorSet> writes;
+        writes.reserve(resources.size());
+        uint32_t i = 0;
+        for (auto& resource: resources) {
+            writes.push_back(VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = m_set,
+                .dstBinding = i,
+                .dstArrayElement = 0,
+                .descriptorCount = m_layout->m_sizes[i].descriptorCount,
+                .descriptorType = m_layout->m_sizes[i].type,
+                .pBufferInfo = resource.bufferInfo()
+            });
+            ++i;
+        }
+
+        vkUpdateDescriptorSets(m_layout->m_device, writes.size(), writes.data(), 0, nullptr);
+    } 
+
+    const VkDescriptorSet* set() const {
+        return &m_set;
+    }
+
+    friend class DescriptorPool;
+};
+
+class DescriptorPool {
+    std::vector<VkDescriptorPoolSize> m_sizes;
+    VkDescriptorPool m_pool;
+    uint32_t m_maxSets;
+    VkDevice m_device;
+
+public:
+
+    DescriptorPool(): m_sizes(), m_pool(VK_NULL_HANDLE), m_maxSets(0), m_device(VK_NULL_HANDLE){}
+    DescriptorPool(const DescriptorPool&) = delete;
+    DescriptorPool& operator=(const DescriptorPool&) = delete;
+    DescriptorPool(DescriptorPool&& other) = delete;
+    DescriptorPool& operator=(DescriptorPool&& other) = delete;
+
+    ~DescriptorPool() {
+        if (m_device != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(m_device, m_pool, nullptr);
+        }
+    }
+
+
+    void registerLayout(const DescriptorSetLayout& layout, uint32_t count=1) {
+        m_maxSets += count;
+        for (auto size: layout.m_impl->m_sizes) {
+            size.descriptorCount *= count;
+            addDescriptorBinding(m_sizes, size);
+        }
+    }
+
+    void prepare(VkDevice device) {
+        m_device = device;
+        VkDescriptorPoolCreateInfo createInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = m_maxSets,
+            .poolSizeCount = static_cast<uint32_t>(m_sizes.size()),
+            .pPoolSizes = m_sizes.data(),
+        };
+
+        VK_CHECK_RESULT(vkCreateDescriptorPool(device, &createInfo, nullptr, &m_pool));        
+    }
+
+    DescriptorSet allocate(const DescriptorSetLayout& layout) {
+        assert(m_device != VK_NULL_HANDLE);
+        VkDescriptorSet set;
+
+        VkDescriptorSetAllocateInfo allocInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = m_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = layout.layout()
+        };
+
+        VK_CHECK_RESULT(vkAllocateDescriptorSets(m_device, &allocInfo, &set));
+
+        return DescriptorSet(set, layout.m_impl);
+    }
+};
