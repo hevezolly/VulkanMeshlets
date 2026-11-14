@@ -2,7 +2,7 @@
 #define SCENE_GLSL_
 
 #ifndef SCENE_SET
-#define SCENE_SET 0
+#define SCENE_SET 1
 #endif
 
 struct Model {
@@ -52,5 +52,12 @@ layout(set = SCENE_SET, binding = 4, std430) readonly buffer MeshletUniqueVertic
 layout(set = SCENE_SET, binding = 5, std430) readonly buffer MeshletLocalIndicesBuffer {
     uint MeshletLocalIndices[];
 };
+
+layout(set = SCENE_SET, binding = 6) uniform SceneStatsUBO {
+    uint countModels;
+    uint countInstances;
+    uint countMeshlets;
+    uint _padding;
+} SceneStats;
 
 #endif

@@ -18,27 +18,25 @@ public:
         return m_layout;
     }
 
-    void prepare(
+    GraphicsPass(
         VkDevice device, 
         // create shaders outside to utilize sample's loader functions and decrease boilerplate
         std::initializer_list<VkPipelineShaderStageCreateInfo> shaderStages,  
         VkFormat dsFormat, VkFormat colorFormat,
-        const DescriptorSetLayout* layout = nullptr
-    ) 
+        std::initializer_list<DescriptorSetLayout> layouts = {}
+    ): m_device(device)
     {
-        
-        VkPushConstantRange pushConstantRange = vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4), 0);
+        std::vector<VkDescriptorSetLayout> collectedLayouts{};
+
+        for (const auto& l : layouts) {
+            collectedLayouts.push_back(*l.layout());
+        }
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{ 
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			.pushConstantRangeCount = 1,
-            .pPushConstantRanges = &pushConstantRange
+            .setLayoutCount = static_cast<uint32_t>(collectedLayouts.size()),
+            .pSetLayouts = collectedLayouts.data()
 		};
-
-        if (layout) {
-            pipelineLayoutInfo.setLayoutCount = 1;
-			pipelineLayoutInfo.pSetLayouts = layout->layout();
-        }
 
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_layout));
 
@@ -146,7 +144,6 @@ public:
 
 		// Solid rendering pipeline
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCI, nullptr, &m_pipeline));
-        m_device = device;
     }
 
     void beginPass(
@@ -156,7 +153,7 @@ public:
     ) 
     {    
         VkClearValue clearValues[2]{};
-		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };;
+		clearValues[0].color = { { 0.8f, 0.8f, 0.8f, 1.0f } };;
 		clearValues[1].depthStencil = { 1.0f, 0 };
         VkRenderPassBeginInfo beginInfo {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -194,8 +191,9 @@ public:
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, set, 1, descriptor.set(), 0, nullptr);
     }
 
-    void drawIndirect(VkCommandBuffer commandBuffer, VkBuffer drawBuffer, uint32_t count=1) {
-        vkCmdDrawIndexedIndirect(commandBuffer, drawBuffer, 0, count, sizeof(VkDrawIndexedIndirectCommand));
+    void drawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer indexBuffer, VkBuffer drawCommandsBuffer, uint32_t count) {
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VkIndexType::VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexedIndirect(commandBuffer, drawCommandsBuffer, 0, count, sizeof(VkDrawIndexedIndirectCommand));
     }
 
     // for debugging purposes

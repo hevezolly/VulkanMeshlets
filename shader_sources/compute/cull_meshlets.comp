@@ -1,0 +1,36 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#define INDIRECT_BUFFERS_SET 0
+#include "common/indirect_buffers.glsl"
+
+#define ENVIRONMENT_SET 1
+#include "common/environment.glsl"
+
+#define SCENE_SET 2
+#include "common/scene.glsl"
+
+#include "common/constants.glsl"
+
+layout (local_size_x = MESHLETS_PROCESSED_PER_GROUP, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    uint workloadId = gl_WorkGroupID.x;
+    MeshletsWorkload workload = MeshletsWorkloads[workloadId];
+
+    uint localMeshletIndex = gl_LocalInvocationID.x;
+    if (workload.meshletsCount <= localMeshletIndex) {
+        return;
+    }
+
+    Meshlet meshlet = Meshlets[workload.startMeshlet + localMeshletIndex];
+
+    uint commandId = atomicAdd(Commands.drawCommandCounter, 1);
+    
+    VkDrawIndexedIndirectCommand drawCommand;
+    drawCommand.firstIndex = meshlet.globalIndexStart;
+    drawCommand.firstInstance = workload.instanceId; // hack to pass instance id to the vertex shader without additional buffers
+    drawCommand.indexCount = meshlet.packedIndexVertexCount & 0xFFFF;
+    drawCommand.instanceCount = 1;
+    drawCommand.vertexOffset = 0;
+    DrawIndirectCommands[commandId] = drawCommand;
+}

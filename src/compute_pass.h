@@ -12,22 +12,21 @@ public:
 
     ComputePass(): m_device(VK_NULL_HANDLE), m_pipeline(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE) {}
 
-    void prepare(VkDevice device, VkShaderModule shaderModule, const DescriptorSetLayout& layout) {
-        m_device = device;
+    ComputePass(VkDevice device, const VkPipelineShaderStageCreateInfo& shaderStageInfo, std::initializer_list<DescriptorSetLayout> layouts = {}): m_device(device) {
+
+        std::vector<VkDescriptorSetLayout> collectedLayouts{};
+
+        for (const auto& l: layouts) {
+            collectedLayouts.push_back(*l.layout());
+        }
+
         VkPipelineLayoutCreateInfo layoutInfo {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = layout.layout()
+            .setLayoutCount = static_cast<uint32_t>(collectedLayouts.size()),
+            .pSetLayouts = collectedLayouts.data()
         };
 
         VK_CHECK_RESULT(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_layout));
-
-        VkPipelineShaderStageCreateInfo shaderStageInfo {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = shaderModule,
-            .pName = "main"
-        };
         
         VkComputePipelineCreateInfo createInfo {
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -38,22 +37,22 @@ public:
         VK_CHECK_RESULT(vkCreateComputePipelines(device, VK_NULL_HANDLE,  1, &createInfo, nullptr, &m_pipeline));
     }
 
+    void bind(VkCommandBuffer commandBuffer, const DescriptorSet& descriptors, uint32_t set = 0) const
+    {
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, set, 1, descriptors.set(), 0, nullptr);
+    }
+
     void dispatch(VkCommandBuffer commandBuffer, uint32_t groupsX, uint32_t groupsY = 1, uint32_t groupsZ = 1) const 
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
         vkCmdDispatch(commandBuffer, groupsX, groupsY, groupsZ);
     }
 
-    void dispatch(
-        VkCommandBuffer commandBuffer, 
-        const DescriptorSet& descriptors, 
-        uint32_t groupsX, uint32_t groupsY = 1, uint32_t groupsZ = 1) const 
+    void dispatchIndirect(VkCommandBuffer commandBuffer, VkBuffer arguments, VkDeviceSize offset=0) const 
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, descriptors.set(), 0, nullptr); 
-        vkCmdDispatch(commandBuffer, groupsX, groupsY, groupsZ);
+        vkCmdDispatchIndirect(commandBuffer, arguments, offset);
     }
-
 
     ComputePass(const ComputePass&) = delete;
     ComputePass& operator=(const ComputePass&) = delete;

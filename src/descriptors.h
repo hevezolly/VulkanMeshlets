@@ -3,10 +3,10 @@
 #include <vector>
 #include <initializer_list>
 #include "VulkanTools.h"
-#include "resources.h"
 #include <memory>
+#include <stdexcept>
 
-void addDescriptorBinding(std::vector<VkDescriptorPoolSize>& sizes, VkDescriptorPoolSize currentSize) {
+inline void addDescriptorBinding(std::vector<VkDescriptorPoolSize>& sizes, VkDescriptorPoolSize currentSize) {
     bool found = false;
     for (size_t i = 0; i < sizes.size(); i++) {
         if (sizes[i].type == currentSize.type) {
@@ -24,6 +24,7 @@ void addDescriptorBinding(std::vector<VkDescriptorPoolSize>& sizes, VkDescriptor
 struct SingleBinding {
     VkDescriptorType type;
     VkShaderStageFlags stage;
+    SingleBinding(VkDescriptorType t, VkShaderStageFlags s): type(t), stage(s){}
 };
 
 class DescriptorSetLayout {
@@ -31,9 +32,9 @@ class DescriptorSetLayout {
     struct Impl {
         VkDevice m_device{VK_NULL_HANDLE};
         VkDescriptorSetLayout m_layout;
-        std::vector<VkDescriptorPoolSize> m_sizes{};
+        std::vector<VkDescriptorSetLayoutBinding> m_bindings{};
 
-        Impl(): m_device(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE), m_sizes(){}
+        Impl(): m_device(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE){}
 
         Impl(const Impl&) = delete;
         Impl& operator=(const Impl&) = delete;
@@ -46,7 +47,7 @@ class DescriptorSetLayout {
             if (this != &other) {
                 m_device = other.m_device;
                 m_layout = other.m_layout;
-                m_sizes = std::move(other.m_sizes);
+                m_bindings = std::move(other.m_bindings);
                 other.m_layout = VK_NULL_HANDLE;
                 other.m_device = VK_NULL_HANDLE;
             }
@@ -65,15 +66,16 @@ class DescriptorSetLayout {
 
     std::shared_ptr<Impl> m_impl; 
 
+    DescriptorSetLayout(std::shared_ptr<Impl> impl): m_impl(impl) {}
 public:
+    DescriptorSetLayout(): m_impl(){}
     DescriptorSetLayout(VkDevice device, std::initializer_list<SingleBinding> sizes): m_impl(std::make_shared<Impl>()) {
 
         uint32_t bindingOffset = 0;
-        std::vector<VkDescriptorSetLayoutBinding> bindings{};
+        auto& bindings = m_impl->m_bindings;
+        bindings.reserve(sizes.size());
 
         for (SingleBinding binding: sizes) {
-            addDescriptorBinding(m_impl->m_sizes, {binding.type, 1});
-
             bindings.push_back(VkDescriptorSetLayoutBinding {
                 .binding = bindingOffset++,
                 .descriptorType = binding.type,
@@ -107,30 +109,38 @@ class DescriptorSet {
     DescriptorSet(VkDescriptorSet set, std::shared_ptr<DescriptorSetLayout::Impl> layout): m_set(set), m_layout(layout){}
 
 public:
-    void write(std::initializer_list<ResourceHandle> resources) {
-        assert(m_layout->m_sizes.size() == resources.size());
+    DescriptorSet(): m_set(VK_NULL_HANDLE), m_layout(){}
+
+    void write(std::initializer_list<VkDescriptorBufferInfo> buffers) {
+        if (!m_layout || m_layout->m_bindings.size() != buffers.size()) {
+            throw std::invalid_argument("Expected one buffer per descriptor set layout binding");
+        }
 
         std::vector<VkWriteDescriptorSet> writes;
-        writes.reserve(resources.size());
+        writes.reserve(buffers.size());
         uint32_t i = 0;
-        for (auto& resource: resources) {
+        for (auto& buffer: buffers) {
+            const auto& binding = m_layout->m_bindings[i++];
             writes.push_back(VkWriteDescriptorSet {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = m_set,
-                .dstBinding = i,
+                .dstBinding = binding.binding,
                 .dstArrayElement = 0,
-                .descriptorCount = m_layout->m_sizes[i].descriptorCount,
-                .descriptorType = m_layout->m_sizes[i].type,
-                .pBufferInfo = resource.bufferInfo()
+                .descriptorCount = binding.descriptorCount,
+                .descriptorType = binding.descriptorType,
+                .pBufferInfo = &buffer
             });
-            ++i;
         }
 
-        vkUpdateDescriptorSets(m_layout->m_device, writes.size(), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(m_layout->m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     } 
 
     const VkDescriptorSet* set() const {
         return &m_set;
+    }
+
+    DescriptorSetLayout layout() const {
+        return DescriptorSetLayout(m_layout);
     }
 
     friend class DescriptorPool;
@@ -159,9 +169,8 @@ public:
 
     void registerLayout(const DescriptorSetLayout& layout, uint32_t count=1) {
         m_maxSets += count;
-        for (auto size: layout.m_impl->m_sizes) {
-            size.descriptorCount *= count;
-            addDescriptorBinding(m_sizes, size);
+        for (const auto& binding : layout.m_impl->m_bindings) {
+            addDescriptorBinding(m_sizes, {binding.descriptorType, binding.descriptorCount * count});
         }
     }
 

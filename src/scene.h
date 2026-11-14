@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 #include <cassert> 
+#include <VulkanBuffer.h>
+#include "descriptors.h"
 
 
 inline uint32_t packHalfPair(float first, float second)
@@ -55,12 +57,56 @@ struct ModelData {
 
 struct Meshlet {
     glm::vec4 boundingSphere;
-    uint32_t indexStart;
-    uint32_t indicesCount;
 
-// align to fit in a cache line cleanly
-    uint32_t m_padding1; 
-    uint32_t m_padding2; 
+    // Half-float pair: index count in the low half, unique vertex count in the high half.
+    uint32_t packedIndexVertexCount;
+
+    // First index of the meshlet's contiguous range in the global index buffer.
+    uint32_t globalIndexStart;
+
+    // First of vertexCount entries in m_meshletUniqueVertices, each a global vertex index.
+    uint32_t uniqueVerticesStart;
+
+    // Region from localIndicesStart with size of indexCount in m_meshletLocalIndices contains
+    // local indices of meshlets. The indirection is the following:
+    // local index -> unique vertex index (offset from uniqueVerticesStart) -> vertex in global buffer
+    uint32_t localIndicesStart;
+
+    Meshlet(uint32_t vertexCount, uint32_t indexCount):
+        boundingSphere{}, globalIndexStart{}, uniqueVerticesStart{}, localIndicesStart{}
+    {
+        packedIndexVertexCount = (indexCount & 0xFFFF) | ((vertexCount & 0xFFFF) << 16);
+    }
+};
+
+struct SceneStats 
+{
+    uint32_t countModels;
+    uint32_t countInstances;
+    uint32_t countMeshlets;
+    uint32_t _padding;
+};
+
+struct GpuScene {
+    vks::Buffer indexBuffer;
+    vks::Buffer vertexBuffer;
+    vks::Buffer modelsBuffer;
+    vks::Buffer meshletsBuffer;
+    vks::Buffer instancesBuffer;
+    vks::Buffer meshletUniqueVerticesBuffer;
+    vks::Buffer meshletLocalIndicesBuffer;
+    vks::Buffer sceneStats;
+
+    void destroy() {
+        indexBuffer.destroy();
+        vertexBuffer.destroy();
+        modelsBuffer.destroy();
+        meshletsBuffer.destroy();
+        instancesBuffer.destroy();
+        meshletUniqueVerticesBuffer.destroy();
+        meshletLocalIndicesBuffer.destroy();
+        sceneStats.destroy();
+    }
 };
 
 class Scene {
@@ -71,6 +117,8 @@ class Scene {
     std::vector<ModelData> m_models{};
     std::vector<Meshlet> m_meshlets{};
     std::vector<InstanceData> m_instances{};
+    std::vector<uint32_t> m_meshletUniqueVertices{};
+    std::vector<uint32_t> m_meshletLocalIndices{};
 
 public:
 
@@ -95,4 +143,6 @@ public:
     std::vector<ModelData>& models() { return m_models; }
     std::vector<InstanceData>& instances() { return m_instances; }
     std::vector<Meshlet>& meshlets() { return m_meshlets; }
+    std::vector<uint32_t>& meshletUniqueVertices() { return m_meshletUniqueVertices; }
+    std::vector<uint32_t>& meshletLocalIndices() { return m_meshletLocalIndices; }
 };

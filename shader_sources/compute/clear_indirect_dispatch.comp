@@ -1,0 +1,14 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#define INDIRECT_BUFFERS_SET 0
+#include "common/indirect_buffers.glsl"
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+void main()
+{
+    Commands.dispatchCommand = VkDispatchIndirectCommand(
+        0u, 1u, 1u
+    );
+    Commands.drawCommandCounter = 0;
+}
