@@ -1,13 +1,10 @@
 #include "vulkanexamplebase.h"
-#include "synchronization.h"
 #include "descriptors.h"
 #include "graphics_pass.h"
 #include "scene.h"
 
 struct VulkanExample final : public VulkanExampleBase
 {
-    uint32_t currentFrame = 0;
-    Synchronization sync{};
     DescriptorPool descriptors{};
     GraphicsPass graphicsPass{};
     Scene scene{};
@@ -17,7 +14,7 @@ struct VulkanExample final : public VulkanExampleBase
     VulkanExample()
     {
         title = "Vulkan Meshlets";
-        settings.overlay = false;
+        settings.overlay = true;
     }
 
     ~VulkanExample() 
@@ -98,7 +95,6 @@ struct VulkanExample final : public VulkanExampleBase
     void prepare() override 
     {
         VulkanExampleBase::prepare();
-        sync.prepare(device, maxConcurrentFrames, swapChain.imageCount);
         const DescriptorSetLayout modelLayout{
             device,
             {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT}}
@@ -125,25 +121,18 @@ struct VulkanExample final : public VulkanExampleBase
         if (!prepared)
             return;
 
-        vkWaitForFences(device, 1, &sync.waitFences[currentFrame], VK_TRUE, UINT64_MAX);
-        VK_CHECK_RESULT(vkResetFences(device, 1, &sync.waitFences[currentFrame]));
-
-        uint32_t imageIndex;
-		VkResult result = vkAcquireNextImageKHR(device, swapChain.swapChain, UINT64_MAX, sync.presentCompleteSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-			windowResize();
-			return;
-		}
-		else if ((result != VK_SUCCESS) && (result != VK_SUBOPTIMAL_KHR)) {
-			throw "Could not acquire the next swap chain image!";
-		}
+        resized = false;
+        prepareFrame();
+        if (resized) {
+            return;
+        }
 
         VkCommandBufferBeginInfo beginInfo {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         };
 
         // reuse drawCmdBuffers and frameBuffers from VulkanExampleBase - nothing particularly interesting to do with them
-        auto commandBuffer = drawCmdBuffers[currentFrame];
+        auto commandBuffer = drawCmdBuffers[currentBuffer];
         VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginInfo));
         {
             auto proj = glm::perspective(
@@ -153,45 +142,18 @@ struct VulkanExample final : public VulkanExampleBase
             glm::mat4 viewProj =proj *
                 glm::lookAt(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
-            graphicsPass.beginPass(commandBuffer, frameBuffers[imageIndex], {width, height});
+            graphicsPass.beginPass(commandBuffer, frameBuffers[currentImageIndex], {width, height});
             vkCmdPushConstants(commandBuffer, graphicsPass.pipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
             graphicsPass.bind(commandBuffer, *modelDescriptors);
             graphicsPass.drawIndexed(commandBuffer, indexBuffer.buffer, scene.indices().size());
+
+            VulkanExampleBase::drawUI(commandBuffer);
+
             graphicsPass.endPass(commandBuffer);
         }
         VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
 
-        const VkPipelineStageFlags waitPipelineStage{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-		VkSubmitInfo submitInfo{
-			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &sync.presentCompleteSemaphores[currentFrame],
-			.pWaitDstStageMask = &waitPipelineStage,
-			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffer,
-			.signalSemaphoreCount = 1,
-			.pSignalSemaphores = &sync.renderToSwapchainImgCompleteSemaphores[imageIndex]
-		};
-		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, sync.waitFences[currentFrame]));
-
-        VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &sync.renderToSwapchainImgCompleteSemaphores[imageIndex],
-            .swapchainCount = 1,
-            .pSwapchains = &swapChain.swapChain,
-            .pImageIndices = &imageIndex
-        };
-		result = vkQueuePresentKHR(queue, &presentInfo);
-
-		if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
-			windowResize();
-		}
-		else if (result != VK_SUCCESS) {
-			throw "Could not present the image to the swap chain!";
-		}
-
-        currentFrame = (currentFrame + 1) % maxConcurrentFrames;
+        submitFrame();
     }
 };
 

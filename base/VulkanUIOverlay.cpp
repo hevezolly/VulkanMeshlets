@@ -107,7 +107,13 @@ namespace vks
         }
 #else
 		const std::string filename = getAssetPath() + "Roboto-Medium.ttf";
-		io.Fonts->AddFontFromFileTTF(filename.c_str(), 16.0f * scale);
+		if (vks::tools::fileExists(filename)) {
+			io.Fonts->AddFontFromFileTTF(filename.c_str(), 16.0f * scale);
+		} else {
+			ImFontConfig fontConfig;
+			fontConfig.SizePixels = 16.0f * scale;
+			io.Fonts->AddFontDefault(&fontConfig);
+		}
 #endif
 		io.Fonts->GetTexDataAsRGBA32(&fontData, &texWidth, &texHeight);
 		VkDeviceSize uploadSize = texWidth*texHeight * 4 * sizeof(char);

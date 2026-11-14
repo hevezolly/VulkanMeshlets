@@ -44,6 +44,10 @@ foreach(shader IN LISTS shader_files)
     endif()
 
     set(compiled_shader "${staging_dir}/${shader}")
+    # VulkanExampleBase loads these two shaders by their full .spv filenames.
+    if(shader MATCHES "^base/uioverlay\\.(vert|frag)$")
+        string(APPEND compiled_shader ".spv")
+    endif()
     get_filename_component(compiled_directory "${compiled_shader}" DIRECTORY)
     file(MAKE_DIRECTORY "${compiled_directory}")
     execute_process(
