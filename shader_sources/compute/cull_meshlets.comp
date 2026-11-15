@@ -12,8 +12,10 @@
 #include "common/culling_utils.glsl"
 
 layout(push_constant) uniform PushConstants {
-    mat4 CameraViewProjection;
-};
+    mat4 cameraViewProjection;
+    uint maxDrawCommands;
+    uint maxWorkloadCount;
+} Setup;
 
 layout (local_size_x = MESHLETS_PROCESSED_PER_GROUP, local_size_y = 1, local_size_z = 1) in;
 void main() {
@@ -29,7 +31,7 @@ void main() {
     Instance instance = Instances[workload.instanceId];
     
     Frustum frustum;
-    extractFrustumPlanes(CameraViewProjection, frustum);
+    extractFrustumPlanes(Setup.cameraViewProjection, frustum);
     vec4 boundingSphere = transformBoundingSphere(instance.transform, meshlet.boundingSphere);
 
     if (!isSphereVisible(boundingSphere, frustum)) {
@@ -37,6 +39,10 @@ void main() {
     }
 
     uint commandId = atomicAdd(Commands.drawCommandCounter, 1);
+
+    if (commandId >= Setup.maxDrawCommands) {
+        return;
+    }
     
     VkDrawIndexedIndirectCommand drawCommand;
     drawCommand.firstIndex = meshlet.globalIndexStart;

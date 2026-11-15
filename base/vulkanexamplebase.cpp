@@ -1350,6 +1350,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		ValidateRect(window, NULL);
 		break;
 	case WM_KEYDOWN:
+		keyStateChanged(static_cast<uint32_t>(wParam), true);
 		switch (wParam)
 		{
 		case KEY_P:
@@ -1392,6 +1393,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		keyPressed((uint32_t)wParam);
 		break;
 	case WM_KEYUP:
+		keyStateChanged(static_cast<uint32_t>(wParam), false);
 		if (camera.type == Camera::firstperson)
 		{
 			switch (wParam)
@@ -1410,6 +1412,10 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				break;
 			}
 		}
+		break;
+	case WM_KILLFOCUS:
+		mouseState.buttons = {};
+		inputFocusLost();
 		break;
 	case WM_LBUTTONDOWN:
 		mouseState.position = glm::vec2((float)LOWORD(lParam), (float)HIWORD(lParam));
@@ -2386,6 +2392,7 @@ void VulkanExampleBase::pointerAxis(wl_pointer *pointer, uint32_t time, uint32_t
 
 /*static*/void VulkanExampleBase::keyboardLeaveCb(void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface)
 {
+	static_cast<VulkanExampleBase*>(data)->inputFocusLost();
 }
 
 /*static*/void VulkanExampleBase::keyboardKeyCb(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
@@ -2396,6 +2403,7 @@ void VulkanExampleBase::pointerAxis(wl_pointer *pointer, uint32_t time, uint32_t
 
 void VulkanExampleBase::keyboardKey(struct wl_keyboard *keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
 {
+	keyStateChanged(key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
 	switch (key)
 	{
 	case KEY_W:
@@ -2628,6 +2636,7 @@ xcb_window_t VulkanExampleBase::setupWindow()
 		XCB_EVENT_MASK_EXPOSURE |
 		XCB_EVENT_MASK_STRUCTURE_NOTIFY |
 		XCB_EVENT_MASK_POINTER_MOTION |
+		XCB_EVENT_MASK_FOCUS_CHANGE |
 		XCB_EVENT_MASK_BUTTON_PRESS |
 		XCB_EVENT_MASK_BUTTON_RELEASE;
 
@@ -2758,6 +2767,7 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 	case XCB_KEY_PRESS:
 	{
 		const xcb_key_release_event_t *keyEvent = (const xcb_key_release_event_t *)event;
+		keyStateChanged(keyEvent->detail, true);
 		switch (keyEvent->detail)
 		{
 			case KEY_W:
@@ -2784,6 +2794,7 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 	case XCB_KEY_RELEASE:
 	{
 		const xcb_key_release_event_t *keyEvent = (const xcb_key_release_event_t *)event;
+		keyStateChanged(keyEvent->detail, false);
 		switch (keyEvent->detail)
 		{
 			case KEY_W:
@@ -2805,6 +2816,10 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 		keyPressed(keyEvent->detail);
 	}
 	break;
+	case XCB_FOCUS_OUT:
+		mouseState.buttons = {};
+		inputFocusLost();
+		break;
 	case XCB_DESTROY_NOTIFY:
 		quit = true;
 		break;

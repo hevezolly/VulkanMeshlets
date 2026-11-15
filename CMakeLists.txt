@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(VulkanMeshlets LANGUAGES CXX)
+project(VulkanMeshlets LANGUAGES C CXX)
 
 find_package(Vulkan REQUIRED)
 add_subdirectory(base)
@@ -7,8 +7,15 @@ add_subdirectory(external/meshoptimizer EXCLUDE_FROM_ALL)
 
 target_compile_features(base PUBLIC cxx_std_20)
 target_compile_definitions(base
-    PUBLIC VK_USE_PLATFORM_WIN32_KHR NOMINMAX=
     PRIVATE "VK_EXAMPLE_ASSETS_DIR=\"./assets/\"" "VK_EXAMPLE_SHADERS_DIR=\"./shaders/\"")
+if(WIN32)
+    target_compile_definitions(base PUBLIC VK_USE_PLATFORM_WIN32_KHR NOMINMAX=)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb)
+    target_compile_definitions(base PUBLIC VK_USE_PLATFORM_XCB_KHR)
+    target_link_libraries(base PkgConfig::XCB)
+endif()
 target_include_directories(base
     PUBLIC
         base

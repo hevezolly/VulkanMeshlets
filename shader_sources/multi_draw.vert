@@ -22,6 +22,6 @@ void main() {
     vec3 normal = mat3(instance.transform) * vec3(znx.y, nyz.x, nyz.y);
 
     outNormal = normal;
-    outColor = randomColor(gl_DrawIDARB);
+    outColor = instance.color;
     gl_Position = Env.cameraViewProjection * position;
 }

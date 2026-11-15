@@ -12,8 +12,10 @@
 #include "common/culling_utils.glsl"
 
 layout(push_constant) uniform PushConstants {
-    mat4 CameraViewProjection;
-};
+    mat4 cameraViewProjection;
+    uint maxDrawCommands;
+    uint maxWorkloadCount;
+} Setup;
 
 layout (local_size_x = DEFAULT_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main() {
@@ -24,7 +26,7 @@ void main() {
     }
 
     Frustum frustum;
-    extractFrustumPlanes(CameraViewProjection, frustum);
+    extractFrustumPlanes(Setup.cameraViewProjection, frustum);
 
     Instance instance = Instances[instanceId];
     Model model = Models[instance.modelId];
@@ -40,6 +42,11 @@ void main() {
     uint beginIndex = atomicAdd(Commands.dispatchCommand.x, numWorkgroups);
     
     for (uint i = 0; i < numWorkgroups; i++) {
+
+        if (beginIndex + i >= Setup.maxWorkloadCount) {
+            return;
+        }
+
         MeshletsWorkload load;
         load.instanceId = instanceId;
         load.startMeshlet = model.meshletStart + processedMeshlets;

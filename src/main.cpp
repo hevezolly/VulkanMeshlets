@@ -20,6 +20,7 @@ struct VulkanExample final : public VulkanExampleBase
     GpuScene gpuScene{};
     DrawSystem drawSystem{};
     ShaderLoader shaderLoader;
+    uint64_t frameIndex{0};
 
     VulkanExample(): shaderLoader(this)
     {
@@ -31,6 +32,7 @@ struct VulkanExample final : public VulkanExampleBase
     ~VulkanExample() 
     {
         gpuScene.destroy();
+        drawSystem.destroy();
     }
 
     inline std::string shadersPath(const std::string& name) 
@@ -302,6 +304,48 @@ struct VulkanExample final : public VulkanExampleBase
         drawSystem.updateUI(*overlay);
     }
 
+    void keyStateChanged(uint32_t key, bool pressed) override
+    {
+        using CameraKey = DrawSystem::CameraKey;
+        switch (key) {
+        case KEY_W: drawSystem.setCameraKey(CameraKey::Forward, pressed); break;
+        case KEY_S: drawSystem.setCameraKey(CameraKey::Backward, pressed); break;
+        case KEY_A: drawSystem.setCameraKey(CameraKey::Left, pressed); break;
+        case KEY_D: drawSystem.setCameraKey(CameraKey::Right, pressed); break;
+        case KEY_SPACE: drawSystem.setCameraKey(CameraKey::Up, pressed); break;
+#if defined(_WIN32)
+        case VK_CONTROL:
+#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
+        case KEY_LEFTCTRL:
+        case KEY_RIGHTCTRL:
+#elif defined(VK_USE_PLATFORM_XCB_KHR)
+        case 0x25: // Left Control in the default X11 keymap.
+        case 0x69: // Right Control in the default X11 keymap.
+#endif
+#if defined(_WIN32) || defined(VK_USE_PLATFORM_WAYLAND_KHR) || defined(VK_USE_PLATFORM_XCB_KHR)
+            drawSystem.setCameraKey(CameraKey::Down, pressed);
+            break;
+#endif
+        default:
+            break;
+        }
+    }
+
+    void inputFocusLost() override
+    {
+        drawSystem.clearCameraKeys();
+    }
+
+    void mouseMoved(double x, double y, bool& handled) override
+    {
+        if (handled || !mouseState.buttons.right) {
+            return;
+        }
+        drawSystem.rotateCamera(static_cast<float>(x) - mouseState.position.x,
+            static_cast<float>(y) - mouseState.position.y);
+        handled = true;
+    }
+
     void render() override 
     {
         if (!prepared)
@@ -321,13 +365,15 @@ struct VulkanExample final : public VulkanExampleBase
         auto commandBuffer = drawCmdBuffers[currentBuffer];
         VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginInfo));
         {
-            drawSystem.beginDraw(commandBuffer, currentBuffer, frameBuffers[currentImageIndex], {width, height}, scene, gpuScene);
+            drawSystem.updateCamera(frameTimer);
+            drawSystem.beginDraw(commandBuffer, currentBuffer, frameIndex, frameBuffers[currentImageIndex], {width, height}, scene, gpuScene);
             VulkanExampleBase::drawUI(commandBuffer);
             drawSystem.endDraw(commandBuffer);
         }
         VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
 
         submitFrame();
+        frameIndex++;
     }
 };
 
