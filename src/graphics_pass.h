@@ -191,9 +191,9 @@ public:
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, set, 1, descriptor.set(), 0, nullptr);
     }
 
-    void drawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer indexBuffer, VkBuffer drawCommandsBuffer, uint32_t count) {
+    void drawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer indexBuffer, VkBuffer drawCommandsBuffer, uint32_t count, VkDeviceSize offset = 0) {
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VkIndexType::VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexedIndirect(commandBuffer, drawCommandsBuffer, 0, count, sizeof(VkDrawIndexedIndirectCommand));
+        vkCmdDrawIndexedIndirect(commandBuffer, drawCommandsBuffer, offset, count, sizeof(VkDrawIndexedIndirectCommand));
     }
 
     // for debugging purposes

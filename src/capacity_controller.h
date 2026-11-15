@@ -34,7 +34,7 @@ public:
         {
             m_lowUsageFrames = 0;
 
-            m_capacity = std::ceil(recentPeak * 1.5);
+            m_capacity = std::max(static_cast<uint32_t>(std::ceil(capacityF * 1.5)), m_minCapacity);
         }
         else if (recentPeakF <
                  m_capacity * m_shrinkThreshold)
@@ -43,9 +43,7 @@ public:
 
             if (m_lowUsageFrames >= m_shrinkDelay)
             {
-                m_capacity = uint32_t(
-                    std::ceil(float(recentPeak) * 1.5)
-                );
+                m_capacity = std::max(static_cast<uint32_t>(std::ceil(float(recentPeak) * 1.5)), m_minCapacity);
 
                 m_lowUsageFrames = 0;
             }

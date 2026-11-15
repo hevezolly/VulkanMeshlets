@@ -1,21 +1,18 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-#define INDIRECT_BUFFERS_SET 0
-#include "common/indirect_buffers.glsl"
+#define COMMON_BUFFERS_SET 0
+#include "common/common_buffers.glsl"
 
 #define SCENE_SET 1
 #include "common/scene.glsl"
 
+#define MULTIDRAW_BUFFERS_SET 2
+#include "common/multidraw_buffers.glsl"
+
 #include "common/constants.glsl"
 
 #include "common/culling_utils.glsl"
-
-layout(push_constant) uniform PushConstants {
-    mat4 cameraViewProjection;
-    uint maxDrawCommands;
-    uint maxWorkloadCount;
-} Setup;
 
 layout (local_size_x = MESHLETS_PROCESSED_PER_GROUP, local_size_y = 1, local_size_z = 1) in;
 void main() {

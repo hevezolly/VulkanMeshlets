@@ -4,6 +4,12 @@
 #include "scene.h"
 #include "draw.h"
 #include "shader_loader.h"
+#include <random>
+#include <glm/gtx/color_space.hpp>
+
+constexpr uint32_t MaxVertexPerMeshlet = 128;
+constexpr uint32_t MaxTrianglePerMeshlet = 128;
+constexpr uint32_t MaxWorkPerMeshlet = std::max(MaxVertexPerMeshlet, MaxTrianglePerMeshlet * 3);
 
 struct VulkanExample final : public VulkanExampleBase
 {
@@ -16,9 +22,9 @@ struct VulkanExample final : public VulkanExampleBase
     };
 
     DescriptorPool descriptors{};
-    Scene scene{128, 255};
+    Scene scene{128, 256};
     GpuScene gpuScene{};
-    DrawSystem drawSystem{};
+    DrawSystem drawSystem{MaxWorkPerMeshlet};
     ShaderLoader shaderLoader;
     uint64_t frameIndex{0};
 
@@ -73,8 +79,30 @@ struct VulkanExample final : public VulkanExampleBase
     void populateScene() {
         uint32_t bunnyModel = scene.addModel(getAssetPath() + "bunny.gltf");
 
-        scene.instantiate(bunnyModel, glm::vec3(0., 0., 0.), glm::quat(1., 0., 0., 0.), 1., glm::vec3(1, 0, 0));
-        scene.instantiate(bunnyModel, glm::vec3(0.3, 0., 0.), glm::quat(1., 0., 0., 0.), 2., glm::vec3(0, 1, 0));
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+        const float positionMin = -10;
+        const float positionMax = 10;
+        const float scaleMin = 0.5;
+        const float scaleMax = 2.;
+
+        for (uint32_t i = 0; i < 2000; i++) {
+
+            float x = dist(rng) * (positionMax - positionMin) + positionMin;
+            float z = dist(rng) * (positionMax - positionMin) + positionMin;
+
+            float scale = dist(rng) * (scaleMax - scaleMin) + scaleMin;
+            
+            float color = dist(rng) * 360;
+
+            glm::vec3 hsv(color, 1.0f, 0.8f);
+            glm::vec3 rgb = glm::rgbColor(hsv);
+
+            float angle = glm::radians(dist(rng) * 360);
+            
+            scene.instantiate(bunnyModel, glm::vec3(x, 0., z), glm::angleAxis(angle, glm::vec3(0., 1., 0.)), scale, glm::rgbColor(hsv));
+        }
     }
 
     void uploadScene() {
@@ -282,7 +310,8 @@ struct VulkanExample final : public VulkanExampleBase
         
         populateScene();
         uploadScene();
-        drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors);
+        bool useMultiDraw = enabledFeatures.multiDrawIndirect == VK_TRUE;
+        drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors, false);
 
         descriptors.prepare(device);
         

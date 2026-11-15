@@ -2,8 +2,12 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_shader_draw_parameters : require
 
+#define ENVIRONMENT_SET 0
 #include "common/environment.glsl"
+
+#define SCENE_SET 1
 #include "common/scene.glsl"
+
 #include "common/utils.glsl"
 
 layout(location = 0) out vec3 outNormal;

@@ -1,8 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-#define INDIRECT_BUFFERS_SET 0
-#include "common/indirect_buffers.glsl"
+#define COMMON_BUFFERS_SET 0
+#include "common/common_buffers.glsl"
 
 #define SCENE_SET 1
 #include "common/scene.glsl"
@@ -10,12 +10,6 @@
 #include "common/constants.glsl"
 
 #include "common/culling_utils.glsl"
-
-layout(push_constant) uniform PushConstants {
-    mat4 cameraViewProjection;
-    uint maxDrawCommands;
-    uint maxWorkloadCount;
-} Setup;
 
 layout (local_size_x = DEFAULT_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main() {
@@ -39,11 +33,11 @@ void main() {
     uint numWorkgroups = (model.meshletCount + MESHLETS_PROCESSED_PER_GROUP - 1) / MESHLETS_PROCESSED_PER_GROUP;
     uint processedMeshlets = 0;
     
-    uint beginIndex = atomicAdd(Commands.dispatchCommand.x, numWorkgroups);
+    uint beginIndex = atomicAdd(Commands.dispatchPerInstanceCommand.x, numWorkgroups);
     
     for (uint i = 0; i < numWorkgroups; i++) {
 
-        if (beginIndex + i >= Setup.maxWorkloadCount) {
+        if (beginIndex + i >= Setup.maxWorkloadPerInstanceCount) {
             return;
         }
 
