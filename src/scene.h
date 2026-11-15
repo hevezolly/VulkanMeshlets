@@ -127,9 +127,10 @@ public:
 
     uint32_t addModel(const std::string& filePath);
 
-    void instantiate(uint32_t model, glm::vec3 position, glm::quat rotation, glm::vec3 color) {
+    // support only uniform scale for bounding spheres to be easier to handle
+    void instantiate(uint32_t model, glm::vec3 position, glm::quat rotation, float scale, glm::vec3 color) {
         assert(model < m_models.size());
-        glm::mat4x4 transform = glm::translate(glm::mat4(1.0), position) * glm::mat4_cast(rotation);
+        glm::mat4x4 transform = glm::translate(glm::mat4(1.f), position) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.f), glm::vec3(scale));
 
         m_instances.push_back(InstanceData {
             .transform = transform,

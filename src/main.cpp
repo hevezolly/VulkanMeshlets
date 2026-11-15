@@ -11,8 +11,12 @@ struct VulkanExample final : public VulkanExampleBase
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES
     };
 
+    VkPhysicalDeviceVulkan11Features features11{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
+    };
+
     DescriptorPool descriptors{};
-    Scene scene{};
+    Scene scene{128, 255};
     GpuScene gpuScene{};
     DrawSystem drawSystem{};
     ShaderLoader shaderLoader;
@@ -38,6 +42,7 @@ struct VulkanExample final : public VulkanExampleBase
     {
         enabledFeatures.multiDrawIndirect = deviceFeatures.multiDrawIndirect;
         enabledFeatures.drawIndirectFirstInstance = VK_TRUE;
+        features11.shaderDrawParameters = VK_TRUE;
 
         // want to use 1.3 for synchronization2
         if (deviceProperties.apiVersion < VK_API_VERSION_1_3) {
@@ -66,8 +71,8 @@ struct VulkanExample final : public VulkanExampleBase
     void populateScene() {
         uint32_t bunnyModel = scene.addModel(getAssetPath() + "bunny.gltf");
 
-        scene.instantiate(bunnyModel, glm::vec3(0., 0., 0.), glm::quat(1., 0., 0., 0.), glm::vec3(1, 0, 0));
-        scene.instantiate(bunnyModel, glm::vec3(0.3, 0., 0.), glm::quat(1., 0., 0., 0.), glm::vec3(0, 1, 0));
+        scene.instantiate(bunnyModel, glm::vec3(0., 0., 0.), glm::quat(1., 0., 0., 0.), 1., glm::vec3(1, 0, 0));
+        scene.instantiate(bunnyModel, glm::vec3(0.3, 0., 0.), glm::quat(1., 0., 0., 0.), 2., glm::vec3(0, 1, 0));
     }
 
     void uploadScene() {
@@ -282,6 +287,19 @@ struct VulkanExample final : public VulkanExampleBase
         drawSystem.prepare(vulkanDevice, descriptors, gpuScene, scene, shaderLoader, depthFormat, swapChain.colorFormat);
 
         prepared = true;
+    }
+
+    void OnUpdateUIOverlay(vks::UIOverlay* overlay) override
+    {
+        if (overlay->header("scene stats")) {
+            overlay->text("model count:    %zu", scene.models().size());
+            overlay->text("instance count: %zu", scene.instances().size());
+            overlay->text("meshlet count:  %zu", scene.meshlets().size());
+            overlay->text("vertices count: %zu", scene.vertices().size());
+            overlay->text("indices count:  %zu", scene.indices().size());
+        }
+
+        drawSystem.updateUI(*overlay);
     }
 
     void render() override 

@@ -5,6 +5,6 @@
 #define DEFAULT_GROUP_SIZE 64
 
 // must match MeshletsProcessedPerGroup of draw.h
-#define MESHLETS_PROCESSED_PER_GROUP 1024
+#define MESHLETS_PROCESSED_PER_GROUP 256
 
 #endif

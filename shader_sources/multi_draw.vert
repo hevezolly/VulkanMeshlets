@@ -1,8 +1,10 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_ARB_shader_draw_parameters : require
 
 #include "common/environment.glsl"
 #include "common/scene.glsl"
+#include "common/utils.glsl"
 
 layout(location = 0) out vec3 outNormal;
 layout(location = 1) out vec3 outColor;
@@ -20,6 +22,6 @@ void main() {
     vec3 normal = mat3(instance.transform) * vec3(znx.y, nyz.x, nyz.y);
 
     outNormal = normal;
-    outColor = instance.color;
-    gl_Position = Env.cameraProjection * Env.cameraView * position;
+    outColor = randomColor(gl_DrawIDARB);
+    gl_Position = Env.cameraViewProjection * position;
 }

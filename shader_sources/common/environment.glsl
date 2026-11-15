@@ -6,8 +6,7 @@
 #endif
 
 layout(set = ENVIRONMENT_SET, binding = 0) uniform EnvironmentUBO {
-    mat4 cameraView;
-    mat4 cameraProjection;
+    mat4 cameraViewProjection;
 
     vec4 lightDirIntensity;
     vec4 lightColor;

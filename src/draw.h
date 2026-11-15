@@ -6,10 +6,11 @@
 #include "compute_pass.h"
 #include "graphics_pass.h"
 #include "shader_loader.h"
+#include "VulkanUIOverlay.h"
 
 const uint32_t DefaultGroupSize = 64;
 
-const uint32_t MeshletsProcessedPerGroup = 1024;
+const uint32_t MeshletsProcessedPerGroup = 256;
 
 struct MeshletsWorkload {
     uint32_t instanceId;
@@ -19,8 +20,7 @@ struct MeshletsWorkload {
 };
 
 struct EnvironmentData {
-    glm::mat4 view;
-    glm::mat4 projection;
+    glm::mat4 viewProjection;
 
     glm::vec4 lightDirIntensity;
     glm::vec4 lightColor;
@@ -64,6 +64,17 @@ class DrawSystem {
         GraphicsPass draw;
     } m_pipelines;
 
+    struct {
+        glm::vec3 cameraPosition;
+        glm::vec3 cameraForward;
+        float fov;
+
+        glm::mat4 viewProjection;
+
+        glm::mat4 frozenViewProjection;
+        bool freezeFrustumCull;
+    } m_cameraData;
+
     uint32_t m_framesInFlight;
     VkDevice m_device;
     vks::VulkanDevice* m_vulkanDevice;
@@ -80,7 +91,7 @@ class DrawSystem {
  
 public:
 
-    const void registerLayouts(VkDevice device, uint32_t framesInFlight, DescriptorPool& pool)
+    void registerLayouts(VkDevice device, uint32_t framesInFlight, DescriptorPool& pool)
     {
         m_framesInFlight = framesInFlight;    
         m_device = device;
@@ -188,18 +199,18 @@ public:
             shaderLoader.loadShader("compute/cull_instances.comp", VK_SHADER_STAGE_COMPUTE_BIT),
             {
                 m_layouts.indirectBuffers,
-                m_layouts.environment, 
                 m_layouts.scene 
-            }
+            },
+            sizeof(glm::mat4)
         );
 
         m_pipelines.cullMeshlets = ComputePass(m_device, 
             shaderLoader.loadShader("compute/cull_meshlets.comp", VK_SHADER_STAGE_COMPUTE_BIT),
             {
                 m_layouts.indirectBuffers,
-                m_layouts.environment, 
                 m_layouts.scene
-            }
+            },
+            sizeof(glm::mat4)
         );
 
         m_pipelines.draw = GraphicsPass(m_device,
@@ -214,6 +225,10 @@ public:
         );
     }
 
+    void updateUI(vks::UIOverlay& overlay) {
+
+    }
+
     void beginDraw(
         VkCommandBuffer cmd, 
         uint32_t frameId, 
@@ -222,14 +237,17 @@ public:
         Scene& scene,
         GpuScene& gpuScene
     ) {
+        glm::mat4 view = glm::lookAt(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f), extent.width / (float) extent.height, 0.1f, 10.0f);
+        projection[1][1] *= -1;
+        glm::mat4 viewProjection = projection * view;
+
         EnvironmentData env {
-            .view = glm::lookAt(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
-            .projection = glm::perspective(glm::radians(45.0f), extent.width / (float) extent.height, 0.1f, 10.0f),
+            .viewProjection = projection * view,
             .lightDirIntensity = glm::vec4(glm::normalize(glm::vec3(0, -1, -1)), 2.),
             .lightColor = glm::vec4(1., 1., 1., 1.),
             .envColorIntensity = glm::vec4(0.53, 0.80, 0.92, 1.)
         };
-        env.projection[1][1] *= -1;
         memcpy(m_buffers.environmentBuffers[frameId].mapped, &env, sizeof(env));
         
         // clear the commandBuffer
@@ -267,8 +285,8 @@ public:
         // For this reason I've intentionally went for a more complex algorithm, that can support multiple models
 
         // don't bind set 0 as it is already bound
-        m_pipelines.cullInstances.bind(cmd, m_sets.environment[frameId], 1);
-        m_pipelines.cullInstances.bind(cmd, m_sets.scene, 2);
+        m_pipelines.cullInstances.bind(cmd, m_sets.scene, 1);
+        m_pipelines.cullInstances.pushConstant(cmd, viewProjection);
         m_pipelines.cullInstances.dispatch(cmd, (scene.instances().size() + DefaultGroupSize - 1) / DefaultGroupSize);
         
         barrier(cmd, {
@@ -348,6 +366,7 @@ public:
         );
     }
 
+    // separate call to be able to draw ui in between
     void endDraw(VkCommandBuffer cmd) {
         m_pipelines.draw.endPass(cmd);
     }

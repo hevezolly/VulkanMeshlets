@@ -4,13 +4,16 @@
 #define INDIRECT_BUFFERS_SET 0
 #include "common/indirect_buffers.glsl"
 
-#define ENVIRONMENT_SET 1
-#include "common/environment.glsl"
-
-#define SCENE_SET 2
+#define SCENE_SET 1
 #include "common/scene.glsl"
 
 #include "common/constants.glsl"
+
+#include "common/culling_utils.glsl"
+
+layout(push_constant) uniform PushConstants {
+    mat4 CameraViewProjection;
+};
 
 layout (local_size_x = DEFAULT_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main() {
@@ -20,8 +23,16 @@ void main() {
         return;
     }
 
+    Frustum frustum;
+    extractFrustumPlanes(CameraViewProjection, frustum);
+
     Instance instance = Instances[instanceId];
     Model model = Models[instance.modelId];
+    vec4 boundingSphere = transformBoundingSphere(instance.transform, model.boundingSphere);
+    
+    if (!isSphereVisible(boundingSphere, frustum)) {
+        return;
+    }
     
     uint numWorkgroups = (model.meshletCount + MESHLETS_PROCESSED_PER_GROUP - 1) / MESHLETS_PROCESSED_PER_GROUP;
     uint processedMeshlets = 0;
