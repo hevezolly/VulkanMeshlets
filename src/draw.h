@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numeric>
 #include "capacity_controller.h"
 #include "delayed_destroy_queue.h"
 #include "barriers.h"
@@ -19,7 +20,6 @@ constexpr uint32_t DefaultGroupSize = 64;
 constexpr uint32_t MeshletsProcessedPerGroup = 256;
 constexpr uint32_t MinIndirectCommands = 16;
 constexpr uint32_t MinMeshletWorkloads = 8;
-constexpr uint32_t MinVertexIndexBuffers = 256;
 
 struct PerInstanceWorkload {
     uint32_t instanceId;
@@ -48,28 +48,20 @@ struct CullingSetup {
     uint32_t maxDrawCommands;
     uint32_t maxWorkloadPerInstanceCount;
     uint32_t maxWorkloadPerMeshletCount;
-    uint32_t maxVertexCount;
-    uint32_t maxIndexCount;
 };
 
 struct Commands {
     VkDispatchIndirectCommand dispatchPerInstanceCommand;
-    VkDispatchIndirectCommand dispatchPerMeshletCommand;
     VkDrawIndexedIndirectCommand singleDrawIndexedCommand;
     uint32_t drawCommandCounter;
-    uint32_t vertexCounter;
-    uint32_t indexCounter;
 };
 
 class DrawSystem {
 public:
     enum class CameraKey { Forward, Backward, Left, Right, Up, Down, Count };
 
-    DrawSystem(uint32_t maxWorkPerMeshlet): m_maxWorkPerMeshlet(maxWorkPerMeshlet){}
-
 private:
     static inline const glm::vec3 WorldUp{0.0f, 1.0f, 0.0f};
-    uint32_t m_maxWorkPerMeshlet;
     
     
     struct {
@@ -91,8 +83,6 @@ private:
         vks::Buffer commandBuffer;
         vks::Buffer perInstanceWorkload;
         vks::Buffer perMeshletWorkload;
-        vks::Buffer culledVertexBuffer;
-        vks::Buffer culledIndexBuffer;
         std::vector<vks::Buffer> readbackBuffers;
     } m_buffers;
 
@@ -101,8 +91,6 @@ private:
         BufferStateHandle commands;
         BufferStateHandle perInstance;
         BufferStateHandle perMeshlet;
-        BufferStateHandle culledVertices;
-        BufferStateHandle culledIndices;
     } m_bufferState;
 
     struct {
@@ -112,9 +100,7 @@ private:
 
         CapacityController perInstanceWorkloadController;
 
-        CapacityController perMeshletWorkloadController;
-        CapacityController culledVertexCapacityController;
-        CapacityController culledIndexCapacityController;
+        CapacityController instancesBufferController;
 
     } m_capacityTracking;
 
@@ -124,7 +110,6 @@ private:
         ComputePass cullMeshletsMultidraw;
 
         ComputePass cullMeshletsSingledraw;
-        ComputePass writeDrawBuffers;
 
         GraphicsPass multiDraw;
         GraphicsPass singleDraw;
@@ -147,6 +132,8 @@ private:
         .lightColor = glm::vec4(1., 1., 1., 1.),
         .envColorIntensity = glm::vec4(0.53, 0.80, 0.92, 0.1)
     };
+    
+    Commands m_readbackCommands;
 
     std::array<bool, static_cast<size_t>(CameraKey::Count)> m_cameraKeys{};
 
@@ -188,25 +175,7 @@ private:
         ));
     }
 
-    void allocCulledVertexBuffer(uint32_t count) {
-        VK_CHECK_RESULT(m_vulkanDevice->createBuffer(
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &m_buffers.culledVertexBuffer, 
-            sizeof(Vertex) * count
-        ));
-    }
-
-    void allocCulledIndexBuffer(uint32_t count) {
-        VK_CHECK_RESULT(m_vulkanDevice->createBuffer(
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &m_buffers.culledIndexBuffer, 
-            sizeof(uint32_t) * count
-        ));
-    }
-
-    void allocateBuffers() {
+    void allocateBuffers(Scene& scene) {
         m_buffers.readbackBuffers.resize(m_framesInFlight);
 
         for (uint32_t i = 0; i < m_framesInFlight; i++) {
@@ -232,12 +201,14 @@ private:
             allocIndirectDrawCommands(MinIndirectCommands);
 
         } else {
-
             allocPerMeshletWorkload(MinMeshletWorkloads);
-
-            allocCulledVertexBuffer(MinVertexIndexBuffers);
-
-            allocCulledIndexBuffer(MinVertexIndexBuffers);
+            uint32_t maxIndexCount = 3;
+            for (const auto& meshlet : scene.meshlets()) {
+                maxIndexCount = std::max(maxIndexCount, meshlet.indexCount);
+            }
+            // Each draw instance uses these indices as triangle-corner IDs.
+            std::vector<uint32_t> indices(maxIndexCount);
+            std::iota(indices.begin(), indices.end(), 0u);
         }
 
         
@@ -259,8 +230,6 @@ private:
     void writeSingledrawDescriptors(uint32_t frameId) {
         m_sets.singleDraw[frameId].write({
             m_buffers.perMeshletWorkload.descriptor,
-            m_buffers.culledVertexBuffer.descriptor,
-            m_buffers.culledIndexBuffer.descriptor
         });
     }
 
@@ -288,8 +257,7 @@ private:
             gpuScene.modelsBuffer.descriptor,
             gpuScene.meshletsBuffer.descriptor,
             gpuScene.instancesBuffer.descriptor,
-            gpuScene.meshletUniqueVerticesBuffer.descriptor,
-            gpuScene.meshletLocalIndicesBuffer.descriptor,
+            gpuScene.indexBuffer.descriptor,
             gpuScene.sceneStats.descriptor
         });
     }
@@ -300,6 +268,7 @@ private:
             shaderLoader.loadShader("compute/clear_indirect_dispatch.comp",  VK_SHADER_STAGE_COMPUTE_BIT),
             {
                 m_layouts.commonBuffers,
+                m_layouts.scene
             },
             sizeof(CullingSetup)
         );
@@ -346,16 +315,6 @@ private:
                 sizeof(CullingSetup)
             );
 
-            m_pipelines.writeDrawBuffers = ComputePass(m_device, 
-                shaderLoader.loadShader("compute/write_draw_buffers.comp", VK_SHADER_STAGE_COMPUTE_BIT),
-                {
-                    m_layouts.commonBuffers,
-                    m_layouts.scene,
-                    m_layouts.singleDraw
-                },
-                sizeof(CullingSetup)
-            );
-
             m_pipelines.singleDraw = GraphicsPass(m_device,
                 {
                     shaderLoader.loadShader("single_draw.vert", VK_SHADER_STAGE_VERTEX_BIT),
@@ -393,16 +352,8 @@ private:
             };
         } else {
             
-            m_capacityTracking.perMeshletWorkloadController = CapacityController {
+            m_capacityTracking.instancesBufferController = CapacityController {
                 MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
-            };
-
-            m_capacityTracking.culledIndexCapacityController = CapacityController {
-                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
-            };
-
-            m_capacityTracking.culledVertexCapacityController = CapacityController {
-                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
             };
 
         }
@@ -422,8 +373,6 @@ public:
         m_buffers.commandBuffer.destroy();
         m_buffers.perInstanceWorkload.destroy();
         m_buffers.perMeshletWorkload.destroy();
-        m_buffers.culledVertexBuffer.destroy();
-        m_buffers.culledIndexBuffer.destroy();
 
         m_destroyQueue.flush();
     }
@@ -450,15 +399,12 @@ public:
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
         });
 
         if (!m_multidraw) {
             m_layouts.singleDraw = DescriptorSetLayout(m_device,{
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT},
             });
 
@@ -485,7 +431,7 @@ public:
     ) {
         m_vulkanDevice = vulkanDevice;
 
-        allocateBuffers();
+        allocateBuffers(scene);
         allocateDescriptors(descriptors, gpuScene);
         preparePipelines(shaderLoader, dsFormat, colorFormat);
         setUpCapacityTracking();
@@ -497,14 +443,16 @@ public:
             if (m_multidraw) {
                 overlay.text("multi-draw enabled");
                 overlay.text("per-instance workload allocated: %zu", m_capacityTracking.perInstanceWorkloadController.capacity());
+                overlay.text("per-instance workload executed: %zu", m_readbackCommands.dispatchPerInstanceCommand.x);
+                overlay.text("draw commands: %zu", m_readbackCommands.drawCommandCounter);
                 overlay.text("max draw commands: %zu", m_capacityTracking.indirectDrawCountController.capacity());
                 overlay.text("draw commands allocated: %zu", m_capacityTracking.indirectDrawBufferController.capacity());
             } else {
                 overlay.text("multi-draw disabled");
                 overlay.text("per-instance workload allocated: %zu", m_capacityTracking.perInstanceWorkloadController.capacity());
-                overlay.text("per-meshlet workload allocated: %zu", m_capacityTracking.perMeshletWorkloadController.capacity());
-                overlay.text("indices allocated: %zu", m_capacityTracking.culledIndexCapacityController.capacity());
-                overlay.text("vertices allocated: %zu", m_capacityTracking.culledVertexCapacityController.capacity());
+                overlay.text("per-instance workload executed: %zu", m_readbackCommands.dispatchPerInstanceCommand.x);
+                overlay.text("meshlet instances allocated: %zu", m_capacityTracking.instancesBufferController.capacity());
+                overlay.text("meshlet instances rendered: %zu", m_readbackCommands.singleDrawIndexedCommand.instanceCount);
             }
         }
 
@@ -602,33 +550,13 @@ public:
 
     void updateCapacitiesSingledraw(const Commands& commands, uint32_t frameId) 
     {
-        m_capacityTracking.perMeshletWorkloadController.update(commands.dispatchPerMeshletCommand.x);
-        m_capacityTracking.culledIndexCapacityController.update(commands.indexCounter);
-        m_capacityTracking.culledVertexCapacityController.update(commands.vertexCounter);
-
-        if (m_buffers.culledIndexBuffer.size != m_capacityTracking.culledIndexCapacityController.capacity() * sizeof(uint32_t)) 
-        {
-            m_destroyQueue.enqueue(m_buffers.culledIndexBuffer);
-
-            allocCulledIndexBuffer(m_capacityTracking.culledIndexCapacityController.capacity());
-
-            m_singledrawBuffersDirty |= (1 << m_framesInFlight) - 1;
-        }
-
-        if (m_buffers.culledVertexBuffer.size != m_capacityTracking.culledVertexCapacityController.capacity() * sizeof(Vertex)) 
-        {
-            m_destroyQueue.enqueue(m_buffers.culledVertexBuffer);
-
-            allocCulledVertexBuffer(m_capacityTracking.culledVertexCapacityController.capacity());
-
-            m_singledrawBuffersDirty |= (1 << m_framesInFlight) - 1;
-        }
+        m_capacityTracking.instancesBufferController.update(commands.drawCommandCounter);
         
-        if (m_buffers.perMeshletWorkload.size != m_capacityTracking.perMeshletWorkloadController.capacity() * sizeof(PerMeshletWorkload)) 
+        if (m_buffers.perMeshletWorkload.size != m_capacityTracking.instancesBufferController.capacity() * sizeof(PerMeshletWorkload)) 
         {
             m_destroyQueue.enqueue(m_buffers.perMeshletWorkload);
 
-            allocPerMeshletWorkload(m_capacityTracking.perMeshletWorkloadController.capacity());
+            allocPerMeshletWorkload(m_capacityTracking.instancesBufferController.capacity());
 
             m_singledrawBuffersDirty |= (1 << m_framesInFlight) - 1;
         }
@@ -641,10 +569,9 @@ public:
 
     void updateCapacities(uint32_t frameId) 
     {
-        Commands commands;
-        memcpy(&commands, m_buffers.readbackBuffers[frameId].mapped, sizeof(Commands));
+        memcpy(&m_readbackCommands, m_buffers.readbackBuffers[frameId].mapped, sizeof(Commands));
 
-        m_capacityTracking.perInstanceWorkloadController.update(commands.dispatchPerInstanceCommand.x);
+        m_capacityTracking.perInstanceWorkloadController.update(m_readbackCommands.dispatchPerInstanceCommand.x);
 
         if (m_buffers.perInstanceWorkload.size != m_capacityTracking.perInstanceWorkloadController.capacity() * 
             sizeof(PerInstanceWorkload)) 
@@ -662,9 +589,9 @@ public:
         }
         
         if (m_multidraw) {
-            updateCapacitiesMultidraw(commands, frameId);
+            updateCapacitiesMultidraw(m_readbackCommands, frameId);
         } else {
-            updateCapacitiesSingledraw(commands, frameId);
+            updateCapacitiesSingledraw(m_readbackCommands, frameId);
         }
     }
 
@@ -797,42 +724,8 @@ private:
 
         m_barriers
             .enqueue(m_bufferState.perMeshlet, {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-            })
-            .enqueue(m_bufferState.commands, {
-                .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            })
-            .barrier(cmd);
-
-        {
-            // compute for every visible meshlet in every visible instance. Produces new vertex and index buffer of 
-            // primitives that survived culling. There is additional info stored per meshlet, that allows to reuse
-            // vertices effectively within every meshlet. Instance id is stored in the unused W component of each vertex.
-
-            m_pipelines.writeDrawBuffers.dispatchIndirect(cmd, 
-                m_buffers.commandBuffer.buffer, sizeof(VkDispatchIndirectCommand));
-
-            m_bufferState.culledIndices = BufferStateHandle{m_buffers.culledIndexBuffer.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            }};
-
-            m_bufferState.culledVertices = BufferStateHandle{m_buffers.culledVertexBuffer.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            }};
-        }
-
-        m_barriers
-            .enqueue(m_bufferState.culledIndices, {
-                .stage = VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT,
-                .access = VK_ACCESS_2_INDEX_READ_BIT
-            })
-            .enqueue(m_bufferState.culledVertices, {
                 .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT_KHR
+                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
             })
             .enqueue(m_bufferState.commands, {
                 .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -858,11 +751,11 @@ private:
             m_pipelines.singleDraw.beginPass(cmd, frameBuffer, extent, glm::vec3(m_environment.envColorIntensity));
             m_pipelines.singleDraw.bind(cmd, m_sets.scene, 0);
             m_pipelines.singleDraw.bind(cmd, m_sets.singleDraw[frameId], 1);
-            m_pipelines.multiDraw.pushConstant(cmd, m_environment);
+            m_pipelines.singleDraw.pushConstant(cmd, m_environment);
             m_pipelines.singleDraw.drawIndexedIndirect(
-                cmd, m_buffers.culledIndexBuffer.buffer, 
+                cmd, gpuScene.meshletIndexBuffer.buffer,
                 m_buffers.commandBuffer.buffer, 1,
-                sizeof(VkDispatchIndirectCommand) * 2
+                offsetof(Commands, singleDrawIndexedCommand)
             );
         }
     }
@@ -890,15 +783,14 @@ public:
             .cameraPosition = glm::vec4(m_cameraData.cullCameraPosition, 0),
             .maxDrawCommands = m_capacityTracking.indirectDrawBufferController.capacity(),
             .maxWorkloadPerInstanceCount = m_capacityTracking.perInstanceWorkloadController.capacity(),
-            .maxWorkloadPerMeshletCount = m_capacityTracking.perMeshletWorkloadController.capacity(),
-            .maxVertexCount = m_capacityTracking.culledVertexCapacityController.capacity(),
-            .maxIndexCount = m_capacityTracking.culledIndexCapacityController.capacity()
+            .maxWorkloadPerMeshletCount = m_capacityTracking.instancesBufferController.capacity(),
         };
         
         {
             // clear the commandBuffer
             m_pipelines.clearCommands.pushConstant(cmd, cullingSetup);
             m_pipelines.clearCommands.bind(cmd, m_sets.commonBuffers[frameId], 0);
+            m_pipelines.clearCommands.bind(cmd, m_sets.scene, 1);
             m_pipelines.clearCommands.dispatch(cmd, 1);
 
             m_bufferState.commands = {m_buffers.commandBuffer.buffer, ResourceState {
@@ -925,7 +817,6 @@ public:
             // For this reason I've intentionally went for a more complex algorithm, that can support multiple models
     
             // don't rebind - pipelines are compatible
-            m_pipelines.cullInstances.bind(cmd, m_sets.scene, 1);
             m_pipelines.cullInstances.dispatch(cmd, (scene.instances().size() + DefaultGroupSize - 1) / DefaultGroupSize);
 
             m_bufferState.perInstance = {m_buffers.perInstanceWorkload.buffer, ResourceState {

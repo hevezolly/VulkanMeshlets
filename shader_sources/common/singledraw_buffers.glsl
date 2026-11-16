@@ -15,12 +15,4 @@ layout(set = SINGLEDRAW_BUFFERS_SET, binding = 0, std430) SINGLEDRAW_ACCESS buff
     PerMeshletWorkload PerMeshletWorkloads[];
 };
 
-layout(set = SINGLEDRAW_BUFFERS_SET, binding = 1, std430) SINGLEDRAW_ACCESS buffer CulledVertexBufferBinding {
-    uvec4 CulledVertices[];
-};
-
-layout(set = SINGLEDRAW_BUFFERS_SET, binding = 2, std430) SINGLEDRAW_ACCESS buffer CulledIndexBufferBinding {
-    uint CulledIndices[];
-};
-
 #endif

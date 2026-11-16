@@ -39,14 +39,16 @@ void main() {
         return;
     }
 
-    uint meshletWorkloadId = atomicAdd(Commands.dispatchPerMeshletCommand.x, 1);
+    uint drawInstanceId = atomicAdd(Commands.drawCommandCounter, 1);
 
-    if (meshletWorkloadId >= Setup.maxWorkloadPerMeshletCount) {
+    if (drawInstanceId >= Setup.maxWorkloadPerMeshletCount) {
         return;
     }
+
+    atomicAdd(Commands.singleDrawIndexedCommand.instanceCount, 1);
 
     PerMeshletWorkload result;
     result.instanceId = workload.instanceId;
     result.meshletId = meshletId;
-    PerMeshletWorkloads[meshletWorkloadId] = result;
+    PerMeshletWorkloads[drawInstanceId] = result;
 }

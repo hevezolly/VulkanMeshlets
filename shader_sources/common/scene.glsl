@@ -23,19 +23,15 @@ layout(set = SCENE_SET, binding = 3, std430) readonly buffer InstanceBuffer {
     Instance Instances[];
 };
 
-layout(set = SCENE_SET, binding = 4, std430) readonly buffer MeshletUniqueVerticesBuffer {
-    uint MeshletUnuqueVertices[];
+layout(set = SCENE_SET, binding = 4, std430) readonly buffer SceneIndexBuffer {
+    uint Indices[];
 };
 
-layout(set = SCENE_SET, binding = 5, std430) readonly buffer MeshletLocalIndicesBuffer {
-    uint MeshletLocalIndices[];
-};
-
-layout(set = SCENE_SET, binding = 6) uniform SceneStatsUBO {
+layout(set = SCENE_SET, binding = 5) uniform SceneStatsUBO {
     uint countModels;
     uint countInstances;
     uint countMeshlets;
-    uint _padding;
+    uint maxMeshletIndices;
 } SceneStats;
 
 #endif

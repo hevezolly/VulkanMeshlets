@@ -7,9 +7,6 @@
 // must match MeshletsProcessedPerGroup of draw.h
 #define MESHLETS_PROCESSED_PER_GROUP 256
 
-// must match MaxWorkPerMeshlet from main.cpp
-#define MAX_PRIMITIVES_PER_MESHLET 384
-
 struct PerMeshletWorkload {
     uint instanceId;
     uint meshletId;
@@ -54,12 +51,12 @@ struct Instance {
 
 struct Meshlet {
     vec4 boundingSphere;
-    uint packedIndexVertexCount;
-    uint globalIndexStart;
-    uint uniqueVerticesStart;
-    uint localIndicesStart;
     vec4 coneAxisAngle;
     vec4 coneApex;
+    uint indexCount;
+    uint globalIndexStart;
+
+    uvec2 _pad;
 };
 
 #endif

@@ -171,9 +171,7 @@ static std::vector<Meshlet> reorderModelByMeshlets(
     IntermediateModelRepresentation& model,
     std::span<const meshopt_Meshlet> meshlets,
     std::span<const unsigned int> meshletVertices,
-    std::span<const unsigned char> meshletTriangles,
-    std::vector<uint32_t>& uniqueVertices,
-    std::vector<uint32_t>& localIndices)
+    std::span<const unsigned char> meshletTriangles)
 {
     constexpr size_t maxIndex = std::numeric_limits<uint32_t>::max();
     const size_t vertexCount = model.vertices.size();
@@ -186,8 +184,6 @@ static std::vector<Meshlet> reorderModelByMeshlets(
     ranges.reserve(meshlets.size());
     IntermediateModelRepresentation reordered;
     reordered.indices.reserve(model.indices.size());
-    uniqueVertices.reserve(model.indices.size());
-    localIndices.reserve(model.indices.size());
 
     for (const auto& meshlet : meshlets) {
         const size_t indexCount = size_t{meshlet.triangle_count} * 3;
@@ -200,17 +196,15 @@ static std::vector<Meshlet> reorderModelByMeshlets(
             throw std::invalid_argument("Meshlet range exceeds its input buffer");
         }
 
-        auto& range = ranges.emplace_back(meshlet.vertex_count, static_cast<uint32_t>(indexCount));
-        range.globalIndexStart = static_cast<uint32_t>(reordered.indices.size());
-        range.uniqueVerticesStart = static_cast<uint32_t>(uniqueVertices.size());
-        range.localIndicesStart = static_cast<uint32_t>(localIndices.size());
+        ranges.push_back(Meshlet{
+            .indexCount = static_cast<uint32_t>(indexCount),
+            .globalIndexStart = static_cast<uint32_t>(reordered.indices.size()),
+        });
         const auto localVertices = meshletVertices.subspan(meshlet.vertex_offset, meshlet.vertex_count);
-        uniqueVertices.insert(uniqueVertices.end(), localVertices.begin(), localVertices.end());
         for (unsigned char localIndex : meshletTriangles.subspan(meshlet.triangle_offset, indexCount)) {
             if (localIndex >= localVertices.size() || localVertices[localIndex] >= vertexCount) {
                 throw std::invalid_argument("Meshlet references an invalid vertex");
             }
-            localIndices.push_back(localIndex);
             reordered.indices.push_back(localVertices[localIndex]);
         }
     }
@@ -232,13 +226,6 @@ static std::vector<Meshlet> reorderModelByMeshlets(
     meshopt_remapVertexBuffer(reordered.vertices.data(), model.vertices.data(), vertexCount, sizeof(Vertex), remap.data());
     meshopt_remapVertexBuffer(reordered.positions.data(), model.positions.data(), vertexCount, 3 * sizeof(float), remap.data());
     meshopt_remapIndexBuffer(reordered.indices.data(), reordered.indices.data(), reordered.indices.size(), remap.data());
-    for (auto& index : uniqueVertices) {
-        if (index >= remap.size() || remap[index] == std::numeric_limits<unsigned int>::max()) {
-            throw std::invalid_argument("Meshlet references an unused or invalid unique vertex");
-        }
-        index = remap[index];
-    }
-
     model = std::move(reordered);
     return ranges;
 }
@@ -265,16 +252,13 @@ uint32_t Scene::addModel(const std::string& filename)
             meshletTriangles.data() + meshlet.triangle_offset, meshlet.triangle_count, meshlet.vertex_count);
     }
 
-    std::vector<uint32_t> uniqueVertices;
-    std::vector<uint32_t> localIndices;
-    auto ranges = reorderModelByMeshlets(model, meshlets, meshletVertices, meshletTriangles, uniqueVertices, localIndices);
+    auto ranges = reorderModelByMeshlets(model, meshlets, meshletVertices, meshletTriangles);
 
     // compute per-meshlet bounds
-    for (size_t i = 0; i < ranges.size(); ++i) {
-        auto& meshlet = ranges[i];
+    for (auto& meshlet : ranges) {
         const auto bounds = meshopt_computeClusterBounds(
             model.indices.data() + meshlet.globalIndexStart,
-            size_t{meshlets[i].triangle_count} * 3,
+            meshlet.indexCount,
             model.positions.data(),
             model.vertices.size(),
             3 * sizeof(float));
@@ -282,6 +266,8 @@ uint32_t Scene::addModel(const std::string& filename)
         meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
         meshlet.coneAxisAngle = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
         meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2], 0);
+
+        m_maxUsedIndicesPerMeshlet = std::max(m_maxUsedIndicesPerMeshlet, meshlet.indexCount);
     }
    
     // compute entire mesh bounding sphere
@@ -290,34 +276,22 @@ uint32_t Scene::addModel(const std::string& filename)
     constexpr size_t maxOffset = std::numeric_limits<uint32_t>::max();
     if (model.vertices.size() > maxOffset - m_vertices.size() ||
         model.indices.size() > maxOffset - m_indices.size() ||
-        ranges.size() > maxOffset - m_meshlets.size() ||
-        uniqueVertices.size() > maxOffset - m_meshletUniqueVertices.size() ||
-        localIndices.size() > maxOffset - m_meshletLocalIndices.size()) {
+        ranges.size() > maxOffset - m_meshlets.size()) {
         throw std::overflow_error("Scene exceeds 32-bit meshlet or geometry ranges");
     }
 
     const auto vertexStart = static_cast<uint32_t>(m_vertices.size());
     const auto indexStart = static_cast<uint32_t>(m_indices.size());
     const auto meshletStart = static_cast<uint32_t>(m_meshlets.size());
-    const auto uniqueVerticesStart = static_cast<uint32_t>(m_meshletUniqueVertices.size());
-    const auto localIndicesStart = static_cast<uint32_t>(m_meshletLocalIndices.size());
     for (auto& index : model.indices) {
         index += vertexStart;
     }
     for (auto& meshlet : ranges) {
         meshlet.globalIndexStart += indexStart;
-        meshlet.uniqueVerticesStart += uniqueVerticesStart;
-        meshlet.localIndicesStart += localIndicesStart;
     }
-    for (auto& index : uniqueVertices) {
-        index += vertexStart;
-    }
-
     m_vertices.reserve(m_vertices.size() + model.vertices.size());
     m_indices.reserve(m_indices.size() + model.indices.size());
     m_meshlets.reserve(m_meshlets.size() + ranges.size());
-    m_meshletUniqueVertices.reserve(m_meshletUniqueVertices.size() + uniqueVertices.size());
-    m_meshletLocalIndices.reserve(m_meshletLocalIndices.size() + localIndices.size());
     uint32_t modelId = m_models.size();
     m_models.push_back({
         .boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius),
@@ -329,8 +303,6 @@ uint32_t Scene::addModel(const std::string& filename)
     m_vertices.insert(m_vertices.end(), model.vertices.begin(), model.vertices.end());
     m_indices.insert(m_indices.end(), model.indices.begin(), model.indices.end());
     m_meshlets.insert(m_meshlets.end(), ranges.begin(), ranges.end());
-    m_meshletUniqueVertices.insert(m_meshletUniqueVertices.end(), uniqueVertices.begin(), uniqueVertices.end());
-    m_meshletLocalIndices.insert(m_meshletLocalIndices.end(), localIndices.begin(), localIndices.end());
 
     return modelId;
 }

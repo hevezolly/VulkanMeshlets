@@ -13,11 +13,8 @@ layout(set = COMMON_BUFFERS_SET, binding = 0, std430) buffer MeshletsWorkloadBin
 
 layout(set = COMMON_BUFFERS_SET, binding = 1, std430) buffer DispatchCommandsBinding {
     VkDispatchIndirectCommand dispatchPerInstanceCommand;
-    VkDispatchIndirectCommand dispatchPerMeshletCommand;
     VkDrawIndexedIndirectCommand singleDrawIndexedCommand;
     uint drawCommandCounter;
-    uint vertexCounter;
-    uint indexCounter;
 } Commands;
 
 layout(push_constant) uniform PushConstants {
@@ -26,8 +23,6 @@ layout(push_constant) uniform PushConstants {
     uint maxDrawCommands;
     uint maxWorkloadPerInstanceCount;
     uint maxWorkloadPerMeshletCount;
-    uint maxVertexCount;
-    uint maxIndexCount;
 } Setup;
 
 #endif

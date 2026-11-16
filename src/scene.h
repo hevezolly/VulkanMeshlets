@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_ENABLE_EXPERIMENTAL
@@ -57,30 +58,15 @@ struct ModelData {
 
 struct Meshlet {
     glm::vec4 boundingSphere;
-
-    // Half-float pair: index count in the low half, unique vertex count in the high half.
-    uint32_t packedIndexVertexCount;
-
+    glm::vec4 coneAxisAngle;
+    glm::vec4 coneApex;
+    uint32_t indexCount;
     // First index of the meshlet's contiguous range in the global index buffer.
     uint32_t globalIndexStart;
 
-    // First of vertexCount entries in m_meshletUniqueVertices, each a global vertex index.
-    uint32_t uniqueVerticesStart;
-
-    // Region from localIndicesStart with size of indexCount in m_meshletLocalIndices contains
-    // local indices of meshlets. The indirection is the following:
-    // local index -> unique vertex index (offset from uniqueVerticesStart) -> vertex in global buffer
-    uint32_t localIndicesStart;
-
-    // Some info for backface culling. Getting it almost for free from meshoptimizer lib.
-    glm::vec4 coneAxisAngle;
-    glm::vec4 coneApex;
-
-    Meshlet(uint32_t vertexCount, uint32_t indexCount):
-        boundingSphere{}, globalIndexStart{}, uniqueVerticesStart{}, localIndicesStart{}
-    {
-        packedIndexVertexCount = (indexCount & 0xFFFF) | ((vertexCount & 0xFFFF) << 16);
-    }
+    // pad to cleanly fit into a cache line
+    uint32_t _pad0;
+    uint32_t _pad1;
 };
 
 struct SceneStats 
@@ -88,7 +74,7 @@ struct SceneStats
     uint32_t countModels;
     uint32_t countInstances;
     uint32_t countMeshlets;
-    uint32_t _padding;
+    uint32_t maxMeshletIndices;
 };
 
 struct GpuScene {
@@ -97,9 +83,11 @@ struct GpuScene {
     vks::Buffer modelsBuffer;
     vks::Buffer meshletsBuffer;
     vks::Buffer instancesBuffer;
-    vks::Buffer meshletUniqueVerticesBuffer;
-    vks::Buffer meshletLocalIndicesBuffer;
     vks::Buffer sceneStats;
+
+    // degenerate buffer consisting on [0, 1, 2, 3, ..., m_maxUsedIndicesPerMeshlet-1].
+    // used for instanced meshlets rendering
+    vks::Buffer meshletIndexBuffer; 
 
     void destroy() {
         indexBuffer.destroy();
@@ -107,9 +95,8 @@ struct GpuScene {
         modelsBuffer.destroy();
         meshletsBuffer.destroy();
         instancesBuffer.destroy();
-        meshletUniqueVerticesBuffer.destroy();
-        meshletLocalIndicesBuffer.destroy();
         sceneStats.destroy();
+        meshletIndexBuffer.destroy();
     }
 };
 
@@ -121,13 +108,12 @@ class Scene {
     std::vector<ModelData> m_models{};
     std::vector<Meshlet> m_meshlets{};
     std::vector<InstanceData> m_instances{};
-    std::vector<uint32_t> m_meshletUniqueVertices{};
-    std::vector<uint32_t> m_meshletLocalIndices{};
+    uint32_t m_maxUsedIndicesPerMeshlet;
 
 public:
 
     Scene(uint32_t maxVerticesPerMeshlet = 64, uint32_t maxTrianglesPerMeshlet = 126): 
-        m_maxVerticesPerMeshlet(maxVerticesPerMeshlet), m_maxTrianglesPerMeshlet(maxTrianglesPerMeshlet) {}
+        m_maxVerticesPerMeshlet(maxVerticesPerMeshlet), m_maxTrianglesPerMeshlet(maxTrianglesPerMeshlet), m_maxUsedIndicesPerMeshlet(0) {}
 
     uint32_t addModel(const std::string& filePath);
 
@@ -148,6 +134,5 @@ public:
     std::vector<ModelData>& models() { return m_models; }
     std::vector<InstanceData>& instances() { return m_instances; }
     std::vector<Meshlet>& meshlets() { return m_meshlets; }
-    std::vector<uint32_t>& meshletUniqueVertices() { return m_meshletUniqueVertices; }
-    std::vector<uint32_t>& meshletLocalIndices() { return m_meshletLocalIndices; }
+    uint32_t maxIndexPerMeshlet() {return m_maxUsedIndicesPerMeshlet; }
 };

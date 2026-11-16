@@ -7,9 +7,11 @@
 #include <random>
 #include <glm/gtx/color_space.hpp>
 
-constexpr uint32_t MaxVertexPerMeshlet = 128;
-constexpr uint32_t MaxTrianglePerMeshlet = 128;
-constexpr uint32_t MaxWorkPerMeshlet = std::max(MaxVertexPerMeshlet, MaxTrianglePerMeshlet * 3);
+constexpr const char* SINGLE_DRAW_ARG_NAME = "singleDraw";
+constexpr const char* SINGLE_DRAW_ARG = "--single-draw";
+
+constexpr const char* INSTANCE_COUNT_ARG_NAME = "numberInstances";
+constexpr const char* INSTANCE_COUNT_ARG = "--instances";
 
 struct VulkanExample final : public VulkanExampleBase
 {
@@ -24,7 +26,7 @@ struct VulkanExample final : public VulkanExampleBase
     DescriptorPool descriptors{};
     Scene scene{128, 256};
     GpuScene gpuScene{};
-    DrawSystem drawSystem{MaxWorkPerMeshlet};
+    DrawSystem drawSystem{};
     ShaderLoader shaderLoader;
     uint64_t frameIndex{0};
 
@@ -34,7 +36,8 @@ struct VulkanExample final : public VulkanExampleBase
         apiVersion = VK_API_VERSION_1_3;
         settings.overlay = true;
 
-        commandLineParser.add("singleDraw", {"--single-draw"}, false, "Force the single-draw fallback");
+        commandLineParser.add(SINGLE_DRAW_ARG_NAME, {SINGLE_DRAW_ARG}, false, "Force the single-draw fallback");
+        commandLineParser.add(INSTANCE_COUNT_ARG_NAME, {INSTANCE_COUNT_ARG}, true, "Number of instances added to the scene");
         commandLineParser.parse(args);
     }
 
@@ -90,7 +93,9 @@ struct VulkanExample final : public VulkanExampleBase
         const float scaleMin = 0.5;
         const float scaleMax = 2.;
 
-        for (uint32_t i = 0; i < 2000; i++) {
+        int32_t instanceCount = commandLineParser.getValueAsInt(INSTANCE_COUNT_ARG_NAME, 4000);
+
+        for (uint32_t i = 0; i < instanceCount; i++) {
 
             float x = dist(rng) * (positionMax - positionMin) + positionMin;
             float z = dist(rng) * (positionMax - positionMin) + positionMin;
@@ -115,10 +120,16 @@ struct VulkanExample final : public VulkanExampleBase
         VkDeviceSize modelsBufferSize = scene.models().size() * sizeof(ModelData);
         VkDeviceSize meshletsBufferSize = scene.meshlets().size() * sizeof(Meshlet);
         VkDeviceSize instancesBufferSize = scene.instances().size() * sizeof(InstanceData);
-        VkDeviceSize meshletUniqueVerticesBufferSize = scene.meshletUniqueVertices().size() * sizeof(uint32_t);
-        VkDeviceSize meshletLocalIndicesBufferSize = scene.meshletLocalIndices().size() * sizeof(uint32_t);
+        VkDeviceSize meshletIndicesBufferSize = scene.maxIndexPerMeshlet() * sizeof(uint32_t);
 
         GpuScene stagingScene;
+
+        std::vector<uint32_t> meshletIndices;
+        meshletIndices.reserve(scene.maxIndexPerMeshlet());
+
+        for (uint32_t i = 0; i < scene.maxIndexPerMeshlet(); i++) {
+            meshletIndices.push_back(i);
+        }
 
         // staging
         VK_CHECK_RESULT(vulkanDevice->createBuffer(
@@ -164,23 +175,14 @@ struct VulkanExample final : public VulkanExampleBase
         VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&stagingScene.meshletUniqueVerticesBuffer,
-			meshletUniqueVerticesBufferSize,
-			scene.meshletUniqueVertices().data()
+			&stagingScene.meshletIndexBuffer,
+			meshletIndicesBufferSize,
+			meshletIndices.data()
         ));
-
-        VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&stagingScene.meshletLocalIndicesBuffer,
-			meshletLocalIndicesBufferSize,
-			scene.meshletLocalIndices().data()
-        ));
-
 
         // gpu-local
         VK_CHECK_RESULT(vulkanDevice->createBuffer(
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &gpuScene.indexBuffer,
             indexBufferSize
@@ -215,23 +217,17 @@ struct VulkanExample final : public VulkanExampleBase
         ));
 
         VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&gpuScene.meshletUniqueVerticesBuffer,
-			meshletUniqueVerticesBufferSize
-        ));
-
-        VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&gpuScene.meshletLocalIndicesBuffer,
-			meshletLocalIndicesBufferSize
+			&gpuScene.meshletIndexBuffer,
+			meshletIndicesBufferSize
         ));
 
         SceneStats stats {
             .countModels = static_cast<uint32_t>(scene.models().size()),
             .countInstances = static_cast<uint32_t>(scene.instances().size()),
-            .countMeshlets = static_cast<uint32_t>(scene.meshlets().size())
+            .countMeshlets = static_cast<uint32_t>(scene.meshlets().size()),
+            .maxMeshletIndices = static_cast<uint32_t>(scene.maxIndexPerMeshlet())
         };
 
         VK_CHECK_RESULT(vulkanDevice->createBuffer(
@@ -286,19 +282,11 @@ struct VulkanExample final : public VulkanExampleBase
 			1,
 			&copyRegion);
 
-        copyRegion.size = meshletUniqueVerticesBufferSize;
-		vkCmdCopyBuffer(
+        copyRegion.size = meshletIndicesBufferSize;
+        vkCmdCopyBuffer(
 			copyCmd,
-			stagingScene.meshletUniqueVerticesBuffer.buffer,
-			gpuScene.meshletUniqueVerticesBuffer.buffer,
-			1,
-			&copyRegion);
-
-        copyRegion.size = meshletLocalIndicesBufferSize;
-		vkCmdCopyBuffer(
-			copyCmd,
-			stagingScene.meshletLocalIndicesBuffer.buffer,
-			gpuScene.meshletLocalIndicesBuffer.buffer,
+			stagingScene.meshletIndexBuffer.buffer,
+			gpuScene.meshletIndexBuffer.buffer,
 			1,
 			&copyRegion);
 
@@ -314,7 +302,7 @@ struct VulkanExample final : public VulkanExampleBase
         populateScene();
         uploadScene();
         bool useMultiDraw = enabledFeatures.multiDrawIndirect == VK_TRUE &&
-            !commandLineParser.isSet("singleDraw");
+            !commandLineParser.isSet(SINGLE_DRAW_ARG_NAME);
         drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors, useMultiDraw);
 
         descriptors.prepare(device);

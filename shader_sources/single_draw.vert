@@ -17,14 +17,23 @@ layout(location = 1) out vec3 outColor;
 layout(location = 2) out vec3 outPosition;
 
 void main() {
-    
-    uvec4 packedVertex = CulledVertices[gl_VertexIndex];
-    Instance instance = Instances[packedVertex.w];
+    PerMeshletWorkload workload = PerMeshletWorkloads[gl_InstanceIndex];
+    Meshlet meshlet = Meshlets[workload.meshletId];
+    uint corner = uint(gl_VertexIndex);
+    if (corner >= meshlet.indexCount) {
+        // The index template pads shorter meshlets with degenerate triangles.
+        outNormal = vec3(0.0);
+        outColor = vec3(0.0);
+        outPosition = vec3(0.0);
+        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
 
+    Instance instance = Instances[workload.instanceId];
+    uvec4 packedVertex = Vertices[Indices[meshlet.globalIndexStart + corner]];
     vec2 xy = unpackHalf2x16(packedVertex.x);
     vec2 znx = unpackHalf2x16(packedVertex.y);
     vec2 nyz = unpackHalf2x16(packedVertex.z);
-
     vec4 position = instance.transform * vec4(xy.x, xy.y, znx.x, 1);
     vec3 normal = mat3(instance.transform) * vec3(znx.y, nyz.x, nyz.y);
 

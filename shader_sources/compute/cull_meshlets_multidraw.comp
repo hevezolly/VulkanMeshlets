@@ -96,7 +96,6 @@ void main() {
             return;
         }
 
-        uint meshletIndexCount = meshlet.packedIndexVertexCount & 0xFFFF;
-        atomicAdd(DrawIndirectCommands[commandId].indexCount, meshletIndexCount);
+        atomicAdd(DrawIndirectCommands[commandId].indexCount, meshlet.indexCount);
     }
 }
