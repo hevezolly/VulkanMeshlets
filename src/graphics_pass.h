@@ -10,6 +10,7 @@ class GraphicsPass {
     VkPipeline m_pipeline;
     VkPipelineLayout m_layout;
     VkDevice m_device;
+    uint32_t m_pushConstantSize;
 public:
 
     GraphicsPass(): m_device(VK_NULL_HANDLE), m_pass(VK_NULL_HANDLE), m_pipeline(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE){}
@@ -23,8 +24,9 @@ public:
         // create shaders outside to utilize sample's loader functions and decrease boilerplate
         std::initializer_list<VkPipelineShaderStageCreateInfo> shaderStages,  
         VkFormat dsFormat, VkFormat colorFormat,
-        std::initializer_list<DescriptorSetLayout> layouts = {}
-    ): m_device(device)
+        std::initializer_list<DescriptorSetLayout> layouts = {},
+        uint32_t pushConstantSize = 0 // go with a single push constant range just for an ease of use
+    ): m_device(device), m_pushConstantSize(pushConstantSize)
     {
         std::vector<VkDescriptorSetLayout> collectedLayouts{};
 
@@ -37,6 +39,17 @@ public:
             .setLayoutCount = static_cast<uint32_t>(collectedLayouts.size()),
             .pSetLayouts = collectedLayouts.data()
 		};
+
+        VkPushConstantRange pushConstantRange;
+
+        if (pushConstantSize > 0) {
+            pushConstantRange.offset = 0;
+            pushConstantRange.size = pushConstantSize;
+            pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+            pipelineLayoutInfo.pushConstantRangeCount = 1;
+            pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+        }
 
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_layout));
 
@@ -149,11 +162,12 @@ public:
     void beginPass(
         VkCommandBuffer commandBuffer, 
         VkFramebuffer frameBuffer, 
-        VkExtent2D targetExtent
+        VkExtent2D targetExtent,
+        glm::vec3 clearColor
     ) 
     {    
         VkClearValue clearValues[2]{};
-		clearValues[0].color = { { 0.8f, 0.8f, 0.8f, 1.0f } };;
+		clearValues[0].color = { { clearColor.x, clearColor.y, clearColor.z, 1.0f } };;
 		clearValues[1].depthStencil = { 1.0f, 0 };
         VkRenderPassBeginInfo beginInfo {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -191,6 +205,13 @@ public:
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, set, 1, descriptor.set(), 0, nullptr);
     }
 
+    template<typename T>
+    void pushConstant(VkCommandBuffer commandBuffer, const T& value) 
+    {
+        assert(m_pushConstantSize == sizeof(T));
+        vkCmdPushConstants(commandBuffer, m_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, m_pushConstantSize, &value);
+    }
+
     void drawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer indexBuffer, VkBuffer drawCommandsBuffer, uint32_t count, VkDeviceSize offset = 0) {
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VkIndexType::VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexedIndirect(commandBuffer, drawCommandsBuffer, offset, count, sizeof(VkDrawIndexedIndirectCommand));
@@ -225,6 +246,7 @@ public:
             m_device = other.m_device;
             m_pipeline = other.m_pipeline;
             m_pass = other.m_pass;
+            m_pushConstantSize = other.m_pushConstantSize;
 
             other.m_layout = VK_NULL_HANDLE;
             other.m_device = VK_NULL_HANDLE;

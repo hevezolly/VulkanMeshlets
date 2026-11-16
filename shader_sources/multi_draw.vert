@@ -1,17 +1,16 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-#extension GL_ARB_shader_draw_parameters : require
 
-#define ENVIRONMENT_SET 0
-#include "common/environment.glsl"
+#include "common/draw_common.glsl"
 
-#define SCENE_SET 1
+#define SCENE_SET 0
 #include "common/scene.glsl"
 
 #include "common/utils.glsl"
 
 layout(location = 0) out vec3 outNormal;
 layout(location = 1) out vec3 outColor;
+layout(location = 2) out vec3 outPosition;
 
 void main() {
     
@@ -27,5 +26,6 @@ void main() {
 
     outNormal = normal;
     outColor = instance.color;
+    outPosition = position.xyz;
     gl_Position = Env.cameraViewProjection * position;
 }

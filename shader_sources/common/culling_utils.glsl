@@ -1,6 +1,8 @@
 #ifndef CULLING_UTILS_GLSL_
 #define CULLING_UTILS_GLSL_
 
+#include "common/constants.glsl"
+
 struct Frustum {
     vec4 planes[6];
 };
@@ -45,6 +47,53 @@ bool isSphereVisible(vec4 boundingSphere, Frustum frustum)
     }
 
     return true;
+}
+
+struct CullingCone {
+    vec3 apex;
+    vec3 axis;
+    float cutoff;
+};
+
+void transformCullingCone(mat4 transform, inout CullingCone cone) {
+    cone.apex = (transform * vec4(cone.apex, 1.)).xyz;
+    cone.axis = mat3(transform) * cone.axis;
+    cone.axis = normalize(cone.axis);
+}
+
+bool isConeFrontFacing(vec3 cameraPosition, CullingCone cone) {
+
+    if (cone.cutoff >= 1.) {
+        return true; // meshoptimizer uses >=1 for unusable cones 
+    }
+
+    vec3 view = normalize(cameraPosition - cone.apex);
+
+    return dot(view, cone.axis) > -cone.cutoff;
+}
+
+bool isMeshletVisible(
+    in Meshlet meshlet,
+    in mat4 transform,
+    in mat4 cameraViewProjection,
+    in vec3 cameraPosition
+) {
+    Frustum frustum;
+    extractFrustumPlanes(cameraViewProjection, frustum);
+    vec4 boundingSphere = transformBoundingSphere(transform, meshlet.boundingSphere);
+
+    bool meshletVisible = isSphereVisible(boundingSphere, frustum);
+
+    if (meshletVisible) {
+        CullingCone cone;
+        cone.apex = meshlet.coneApex.xyz;
+        cone.axis = meshlet.coneAxisAngle.xyz;
+        cone.cutoff = meshlet.coneAxisAngle.w;
+        transformCullingCone(transform, cone);
+        meshletVisible = isConeFrontFacing(cameraPosition, cone);
+    }
+
+    return meshletVisible;
 }
 
 #endif

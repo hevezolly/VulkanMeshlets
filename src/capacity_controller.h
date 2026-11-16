@@ -4,6 +4,7 @@ class CapacityController
 {
     uint32_t m_capacity = 1024;
     uint32_t m_lowUsageFrames = 0;
+    uint32_t m_maxLow = 0;
     float m_growThreshold = 0.85f;
     float m_shrinkThreshold = 0.35f;
     uint32_t m_shrinkDelay = 120;
@@ -34,23 +35,26 @@ public:
         {
             m_lowUsageFrames = 0;
 
-            m_capacity = std::max(static_cast<uint32_t>(std::ceil(capacityF * 1.5)), m_minCapacity);
+            m_capacity = std::max(static_cast<uint32_t>(std::ceil(std::max(recentPeak, m_capacity) * m_excessFactor)), m_minCapacity);
         }
         else if (recentPeakF <
                  m_capacity * m_shrinkThreshold)
         {
             ++m_lowUsageFrames;
+            m_maxLow = std::max(m_maxLow, recentPeak);
 
             if (m_lowUsageFrames >= m_shrinkDelay)
             {
-                m_capacity = std::max(static_cast<uint32_t>(std::ceil(float(recentPeak) * 1.5)), m_minCapacity);
+                m_capacity = std::max(static_cast<uint32_t>(std::ceil(m_maxLow * m_excessFactor)), m_minCapacity);
 
                 m_lowUsageFrames = 0;
+                m_maxLow = 0;
             }
         }
         else
         {
             m_lowUsageFrames = 0;
+            m_maxLow = 0;
         }
     }
 };

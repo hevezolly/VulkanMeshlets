@@ -35,17 +35,16 @@ struct PerMeshletWorkload {
 
 struct EnvironmentData {
     glm::mat4 viewProjection;
+    glm::vec4 cameraPosition;
 
     glm::vec4 lightDirIntensity;
     glm::vec4 lightColor;
     glm::vec4 envColorIntensity;
-    
-    // align to fit into cache lines nicely
-    glm::vec4 _padding;
 };
 
 struct CullingSetup {
     glm::mat4 cameraViewProjection;
+    glm::vec4 cameraPosition;
     uint32_t maxDrawCommands;
     uint32_t maxWorkloadPerInstanceCount;
     uint32_t maxWorkloadPerMeshletCount;
@@ -74,7 +73,6 @@ private:
     
     
     struct {
-        DescriptorSetLayout environment;
         DescriptorSetLayout commonBuffers;
         DescriptorSetLayout scene;
         DescriptorSetLayout multiDraw;
@@ -82,7 +80,6 @@ private:
     } m_layouts;
 
     struct {
-        std::vector<DescriptorSet> environment;
         std::vector<DescriptorSet> commonBuffers;
         DescriptorSet scene;
         std::vector<DescriptorSet> multiDraw;
@@ -90,7 +87,6 @@ private:
     } m_sets;
 
     struct {
-        std::vector<vks::Buffer> environmentBuffers;
         vks::Buffer indirectDrawCommandsBuffer;
         vks::Buffer commandBuffer;
         vks::Buffer perInstanceWorkload;
@@ -136,14 +132,21 @@ private:
 
     struct {
         glm::vec3 cameraPosition{0.5f, 0.5f, 0.5f};
-        glm::vec3 cameraForward = glm::normalize(-cameraPosition);
+        glm::vec3 cameraForward = glm::normalize(glm::vec3{0., 0.3, 0.} - cameraPosition);
         float fov = 45.0f;
 
         glm::mat4 viewProjection{1.0f};
 
         glm::mat4 cullViewProjection{1.0f};
+        glm::vec3 cullCameraPosition{0.5f, 0.5f, 0.5f};
         bool freezeFrustumCull = false;
     } m_cameraData;
+
+    EnvironmentData m_environment  {
+        .lightDirIntensity = glm::vec4(glm::vec3(0, 1, 0.5), 1.),
+        .lightColor = glm::vec4(1., 1., 1., 1.),
+        .envColorIntensity = glm::vec4(0.53, 0.80, 0.92, 0.1)
+    };
 
     std::array<bool, static_cast<size_t>(CameraKey::Count)> m_cameraKeys{};
 
@@ -204,16 +207,9 @@ private:
     }
 
     void allocateBuffers() {
-        m_buffers.environmentBuffers.resize(m_framesInFlight);
         m_buffers.readbackBuffers.resize(m_framesInFlight);
 
         for (uint32_t i = 0; i < m_framesInFlight; i++) {
-            VK_CHECK_RESULT(m_vulkanDevice->createBuffer(
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &m_buffers.environmentBuffers[i], sizeof(EnvironmentData)
-            ));
-            VK_CHECK_RESULT(m_buffers.environmentBuffers[i].map());
 
             VK_CHECK_RESULT(m_vulkanDevice->createBuffer(
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -270,14 +266,9 @@ private:
 
     void allocateDescriptors(DescriptorPool& descriptors, GpuScene& gpuScene) 
     {
-        m_sets.environment.reserve(m_framesInFlight);
         m_sets.commonBuffers.reserve(m_framesInFlight);
 
         for (uint32_t i = 0; i < m_framesInFlight; i++) {
-            m_sets.environment.push_back(descriptors.allocate(m_layouts.environment));
-            m_sets.environment[i].write({
-                m_buffers.environmentBuffers[i].descriptor
-            });
 
             m_sets.commonBuffers.push_back(descriptors.allocate(m_layouts.commonBuffers));
             writeCommonDescriptors(i);
@@ -339,9 +330,9 @@ private:
                     shaderLoader.loadShader("draw.frag", VK_SHADER_STAGE_FRAGMENT_BIT),
                 }, dsFormat, colorFormat,
                 {
-                    m_layouts.environment,
                     m_layouts.scene
-                }
+                },
+                sizeof(EnvironmentData)
             );
         }
         else {
@@ -371,10 +362,10 @@ private:
                     shaderLoader.loadShader("draw.frag", VK_SHADER_STAGE_FRAGMENT_BIT),
                 }, dsFormat, colorFormat,
                 {
-                    m_layouts.environment,
                     m_layouts.scene,
                     m_layouts.singleDraw
-                }
+                },
+                sizeof(EnvironmentData)
             );
         }
 
@@ -382,17 +373,18 @@ private:
 
     void setUpCapacityTracking() 
     {
-        const uint32_t defaultShrinkDelay = 360;
+        constexpr uint32_t defaultShrinkDelay = 360;
+        constexpr float defaultExcessFactor = 1.5;
         // ammortizing capacities of both command buffers and number of multi-draw commands.
 
         m_capacityTracking.perInstanceWorkloadController = CapacityController {
-            MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, 1.5
+            MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
         };
 
         if (m_multidraw) {
 
             m_capacityTracking.indirectDrawBufferController = CapacityController {
-                MinIndirectCommands, 0.85, 0.2, defaultShrinkDelay, 1.5
+                MinIndirectCommands, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
             };
 
             // it costs nothing to change the number of commands, so make it a lot more responsive
@@ -402,15 +394,15 @@ private:
         } else {
             
             m_capacityTracking.perMeshletWorkloadController = CapacityController {
-                MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, 1.5
+                MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
             };
 
             m_capacityTracking.culledIndexCapacityController = CapacityController {
-                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, 1.5
+                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
             };
 
             m_capacityTracking.culledVertexCapacityController = CapacityController {
-                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, 1.5
+                MinVertexIndexBuffers, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
             };
 
         }
@@ -420,10 +412,6 @@ private:
 public:
 
     void destroy() {
-        for (auto& env : m_buffers.environmentBuffers) {
-            env.unmap();
-            env.destroy();
-        }
 
         for (auto& readback : m_buffers.readbackBuffers) {
             readback.unmap();
@@ -450,9 +438,6 @@ public:
         m_multidraw = multidraw;
         m_framesInFlight = framesInFlight;    
         m_device = device;
-        m_layouts.environment = DescriptorSetLayout(device, {
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT}
-        });
 
         m_layouts.commonBuffers = DescriptorSetLayout(device, {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT},
@@ -486,7 +471,6 @@ public:
         }
 
         pool.registerLayout(m_layouts.scene);
-        pool.registerLayout(m_layouts.environment, framesInFlight);
         pool.registerLayout(m_layouts.commonBuffers, framesInFlight);
     }
 
@@ -525,9 +509,19 @@ public:
         }
 
 
-        if (overlay.header("camera data")) {
+        if (overlay.header("camera and environment")) {
             overlay.checkBox("freeze frustum cull", &m_cameraData.freezeFrustumCull);
             overlay.sliderFloat("field of view", &m_cameraData.fov, 10., 120.);
+
+            overlay.colorPicker("direct light color", &m_environment.lightColor[0]);
+            overlay.inputFloat("direct light intensity", &m_environment.lightDirIntensity[3], 0.01, 2);
+
+            overlay.colorPicker("environment color", &m_environment.envColorIntensity[0]);
+            overlay.inputFloat("environment intensity", &m_environment.envColorIntensity[3], 0.01, 2);
+
+            overlay.inputFloat("light direction X", &m_environment.lightDirIntensity[0], 0.01, 2);
+            overlay.inputFloat("light direction Y", &m_environment.lightDirIntensity[1], 0.01, 2);
+            overlay.inputFloat("light direction Z", &m_environment.lightDirIntensity[2], 0.01, 2);
         }
     }
 
@@ -580,15 +574,11 @@ public:
 
         if (!m_cameraData.freezeFrustumCull) {
             m_cameraData.cullViewProjection = m_cameraData.viewProjection;
+            m_cameraData.cullCameraPosition = m_cameraData.cameraPosition;
         }
 
-        EnvironmentData env {
-            .viewProjection = m_cameraData.viewProjection,
-            .lightDirIntensity = glm::vec4(glm::normalize(glm::vec3(0, -1, -1)), 2.),
-            .lightColor = glm::vec4(1., 1., 1., 1.),
-            .envColorIntensity = glm::vec4(0.53, 0.80, 0.92, 1.)
-        };
-        memcpy(m_buffers.environmentBuffers[frameId].mapped, &env, sizeof(env));
+        m_environment.viewProjection = m_cameraData.viewProjection;
+        m_environment.cameraPosition = glm::vec4(m_cameraData.cameraPosition, 1);
     }
 
     void updateCapacitiesMultidraw(const Commands& commands, uint32_t frameId) 
@@ -689,7 +679,7 @@ private:
         GpuScene& gpuScene
     ) {
         {
-            // clear draw commands buffer
+            // clear indirect command buffer. Required, since I'm using drawInstancedIndirect, not drawInstancedIndirectCount
             vkCmdFillBuffer(
                 cmd, m_buffers.indirectDrawCommandsBuffer.buffer, 0, VK_WHOLE_SIZE, 0
             );
@@ -724,8 +714,6 @@ private:
             //
             // m_pipelines.cullMeshletsMultidraw culls meshlets of visible instances and generates indirect draw commands. 
             // Thanks to particular vertex and index buffer ordering, it is possible to combine adjesent meshlets into a single draw command.
-            // The shader uses subgroup operations (wave intrinsics) to do so efficiently. 
-    
             
             m_pipelines.cullMeshletsMultidraw.bind(cmd, m_sets.multiDraw[frameId], 2);
             m_pipelines.cullMeshletsMultidraw.dispatchIndirect(cmd, m_buffers.commandBuffer.buffer);
@@ -762,9 +750,9 @@ private:
                 m_capacityTracking.indirectDrawBufferController.capacity() 
             );
             // multi-draw inderect
-            m_pipelines.multiDraw.beginPass(cmd, frameBuffer, extent);
-            m_pipelines.multiDraw.bind(cmd, m_sets.environment[frameId], 0);
-            m_pipelines.multiDraw.bind(cmd, m_sets.scene, 1);
+            m_pipelines.multiDraw.beginPass(cmd, frameBuffer, extent, glm::vec3(m_environment.envColorIntensity));
+            m_pipelines.multiDraw.bind(cmd, m_sets.scene, 0);
+            m_pipelines.multiDraw.pushConstant(cmd, m_environment);
             m_pipelines.multiDraw.drawIndexedIndirect(
                 cmd, gpuScene.indexBuffer.buffer, 
                 m_buffers.indirectDrawCommandsBuffer.buffer,
@@ -795,6 +783,9 @@ private:
             .barrier(cmd);
 
         {
+            // compute work analogus to the multi-draw branch. Culls meshlets and
+            // produces intermediate buffer with meshletId and instanceId correspondance.
+
             m_pipelines.cullMeshletsSingledraw.bind(cmd, m_sets.singleDraw[frameId], 2);
             m_pipelines.cullMeshletsSingledraw.dispatchIndirect(cmd, m_buffers.commandBuffer.buffer);
 
@@ -816,6 +807,10 @@ private:
             .barrier(cmd);
 
         {
+            // compute for every visible meshlet in every visible instance. Produces new vertex and index buffer of 
+            // primitives that survived culling. There is additional info stored per meshlet, that allows to reuse
+            // vertices effectively within every meshlet. Instance id is stored in the unused W component of each vertex.
+
             m_pipelines.writeDrawBuffers.dispatchIndirect(cmd, 
                 m_buffers.commandBuffer.buffer, sizeof(VkDispatchIndirectCommand));
 
@@ -860,10 +855,10 @@ private:
         );
 
         {
-            m_pipelines.singleDraw.beginPass(cmd, frameBuffer, extent);
-            m_pipelines.singleDraw.bind(cmd, m_sets.environment[frameId], 0);
-            m_pipelines.singleDraw.bind(cmd, m_sets.scene, 1);
-            m_pipelines.singleDraw.bind(cmd, m_sets.singleDraw[frameId], 2);
+            m_pipelines.singleDraw.beginPass(cmd, frameBuffer, extent, glm::vec3(m_environment.envColorIntensity));
+            m_pipelines.singleDraw.bind(cmd, m_sets.scene, 0);
+            m_pipelines.singleDraw.bind(cmd, m_sets.singleDraw[frameId], 1);
+            m_pipelines.multiDraw.pushConstant(cmd, m_environment);
             m_pipelines.singleDraw.drawIndexedIndirect(
                 cmd, m_buffers.culledIndexBuffer.buffer, 
                 m_buffers.commandBuffer.buffer, 1,
@@ -892,6 +887,7 @@ public:
 
         CullingSetup cullingSetup {
             .cameraViewProjection = m_cameraData.cullViewProjection,
+            .cameraPosition = glm::vec4(m_cameraData.cullCameraPosition, 0),
             .maxDrawCommands = m_capacityTracking.indirectDrawBufferController.capacity(),
             .maxWorkloadPerInstanceCount = m_capacityTracking.perInstanceWorkloadController.capacity(),
             .maxWorkloadPerMeshletCount = m_capacityTracking.perMeshletWorkloadController.capacity(),

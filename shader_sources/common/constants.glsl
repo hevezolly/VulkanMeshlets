@@ -36,4 +36,30 @@ struct VkDispatchIndirectCommand {
     uint z;
 };
 
+struct Model {
+    vec4 boundingSphere; 
+    
+    uint indexStart;
+    uint indicesCount;
+
+    uint meshletStart;
+    uint meshletCount;
+};
+
+struct Instance {
+    mat4 transform;
+    vec3 color;
+    uint modelId;
+};
+
+struct Meshlet {
+    vec4 boundingSphere;
+    uint packedIndexVertexCount;
+    uint globalIndexStart;
+    uint uniqueVerticesStart;
+    uint localIndicesStart;
+    vec4 coneAxisAngle;
+    vec4 coneApex;
+};
+
 #endif

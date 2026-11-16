@@ -22,6 +22,7 @@ layout(set = COMMON_BUFFERS_SET, binding = 1, std430) buffer DispatchCommandsBin
 
 layout(push_constant) uniform PushConstants {
     mat4 cameraViewProjection;
+    vec4 cameraPosition;
     uint maxDrawCommands;
     uint maxWorkloadPerInstanceCount;
     uint maxWorkloadPerMeshletCount;

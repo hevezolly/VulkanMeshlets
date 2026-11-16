@@ -14,38 +14,89 @@
 
 #include "common/culling_utils.glsl"
 
+shared uint IsMeshletVisible[MESHLETS_PROCESSED_PER_GROUP];
+shared uint RunData[MESHLETS_PROCESSED_PER_GROUP];
+
 layout (local_size_x = MESHLETS_PROCESSED_PER_GROUP, local_size_y = 1, local_size_z = 1) in;
 void main() {
     uint workloadId = gl_WorkGroupID.x;
-    MeshletsWorkload workload = MeshletsWorkloads[workloadId];
-
     uint localMeshletIndex = gl_LocalInvocationID.x;
-    if (workload.meshletsCount <= localMeshletIndex) {
-        return;
+
+    MeshletsWorkload workload;
+    workload.meshletsCount = 0;
+    Meshlet meshlet;
+    Instance instance;
+    bool isActive = Setup.maxWorkloadPerInstanceCount > workloadId;
+    bool meshletVisible = false;
+
+    if (isActive) {
+        workload = MeshletsWorkloads[workloadId];
+        isActive =  workload.meshletsCount > localMeshletIndex;
     }
 
-    Meshlet meshlet = Meshlets[workload.startMeshlet + localMeshletIndex];
-    Instance instance = Instances[workload.instanceId];
+    if (isActive) {
+        meshlet = Meshlets[workload.startMeshlet + localMeshletIndex];
+        instance = Instances[workload.instanceId];
+        
+        meshletVisible = isMeshletVisible(meshlet, instance.transform, Setup.cameraViewProjection, Setup.cameraPosition.xyz);
+    }
+
+    IsMeshletVisible[localMeshletIndex] = uint(meshletVisible);
+
+    barrier();
+
+    // determine is the current thread is first in a contigious range of visible meshlets
+    bool isRunStart = meshletVisible && (localMeshletIndex == 0 || IsMeshletVisible[localMeshletIndex - 1] == 0);
+    RunData[localMeshletIndex] = uint(isRunStart);
+
+    barrier();
+
+    // prefix summ over RunData. After that each lane would contain run index + 1
+    for (uint offset = 1; offset < MESHLETS_PROCESSED_PER_GROUP; offset <<= 1u) {
+
+        uint previous = 0;
+        if (localMeshletIndex >= offset) {
+            previous = RunData[localMeshletIndex - offset];
+        }
+
+        barrier();
+
+        RunData[localMeshletIndex] += previous;
+        
+        barrier();
+    }
+
+    uint runIndex = RunData[localMeshletIndex] - 1; // can't surpass MESHLETS_PROCESSED_PER_GROUP
     
-    Frustum frustum;
-    extractFrustumPlanes(Setup.cameraViewProjection, frustum);
-    vec4 boundingSphere = transformBoundingSphere(instance.transform, meshlet.boundingSphere);
+    if (isRunStart) {
+        uint commandId = atomicAdd(Commands.drawCommandCounter, 1);
 
-    if (!isSphereVisible(boundingSphere, frustum)) {
-        return;
+        if (commandId < Setup.maxDrawCommands) {
+
+            // initially indirect commands are cleared. Write only some portions so other threads could safely add to indexCount
+            DrawIndirectCommands[commandId].firstIndex = meshlet.globalIndexStart;
+            DrawIndirectCommands[commandId].firstInstance = workload.instanceId; // hack to pass instance id to the vertex shader without additional buffers
+            DrawIndirectCommands[commandId].instanceCount = 1;
+
+        } else {
+            commandId = 0xFFFFFFFF; // sentinel value meaning the command is overflowed
+        }
+
+        // reuse IsMeshletVisible to pass commandId
+        IsMeshletVisible[runIndex] = commandId;
     }
 
-    uint commandId = atomicAdd(Commands.drawCommandCounter, 1);
+    barrier();
 
-    if (commandId >= Setup.maxDrawCommands) {
-        return;
+    if (meshletVisible) 
+    {
+        uint commandId = IsMeshletVisible[runIndex];
+
+        if (commandId == 0xFFFFFFFF) {
+            return;
+        }
+
+        uint meshletIndexCount = meshlet.packedIndexVertexCount & 0xFFFF;
+        atomicAdd(DrawIndirectCommands[commandId].indexCount, meshletIndexCount);
     }
-    
-    VkDrawIndexedIndirectCommand drawCommand;
-    drawCommand.firstIndex = meshlet.globalIndexStart;
-    drawCommand.firstInstance = workload.instanceId; // hack to pass instance id to the vertex shader without additional buffers
-    drawCommand.indexCount = meshlet.packedIndexVertexCount & 0xFFFF;
-    drawCommand.instanceCount = 1;
-    drawCommand.vertexOffset = 0;
-    DrawIndirectCommands[commandId] = drawCommand;
 }

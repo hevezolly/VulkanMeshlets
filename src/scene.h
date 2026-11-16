@@ -72,6 +72,10 @@ struct Meshlet {
     // local index -> unique vertex index (offset from uniqueVerticesStart) -> vertex in global buffer
     uint32_t localIndicesStart;
 
+    // Some info for backface culling. Getting it almost for free from meshoptimizer lib.
+    glm::vec4 coneAxisAngle;
+    glm::vec4 coneApex;
+
     Meshlet(uint32_t vertexCount, uint32_t indexCount):
         boundingSphere{}, globalIndexStart{}, uniqueVerticesStart{}, localIndicesStart{}
     {

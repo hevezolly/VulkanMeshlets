@@ -33,6 +33,9 @@ struct VulkanExample final : public VulkanExampleBase
         title = "Vulkan Meshlets";
         apiVersion = VK_API_VERSION_1_3;
         settings.overlay = true;
+
+        commandLineParser.add("singleDraw", {"--single-draw"}, false, "Force the single-draw fallback");
+        commandLineParser.parse(args);
     }
 
     ~VulkanExample() 
@@ -79,7 +82,7 @@ struct VulkanExample final : public VulkanExampleBase
     void populateScene() {
         uint32_t bunnyModel = scene.addModel(getAssetPath() + "bunny.gltf");
 
-        std::mt19937 rng(std::random_device{}());
+        std::mt19937 rng(0u);
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
         const float positionMin = -10;
@@ -310,8 +313,9 @@ struct VulkanExample final : public VulkanExampleBase
         
         populateScene();
         uploadScene();
-        bool useMultiDraw = enabledFeatures.multiDrawIndirect == VK_TRUE;
-        drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors, false);
+        bool useMultiDraw = enabledFeatures.multiDrawIndirect == VK_TRUE &&
+            !commandLineParser.isSet("singleDraw");
+        drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors, useMultiDraw);
 
         descriptors.prepare(device);
         

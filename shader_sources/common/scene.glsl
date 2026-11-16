@@ -5,29 +5,7 @@
 #define SCENE_SET 1
 #endif
 
-struct Model {
-    vec4 boundingSphere; 
-    
-    uint indexStart;
-    uint indicesCount;
-
-    uint meshletStart;
-    uint meshletCount;
-};
-
-struct Instance {
-    mat4 transform;
-    vec3 color;
-    uint modelId;
-};
-
-struct Meshlet {
-    vec4 boundingSphere;
-    uint packedIndexVertexCount;
-    uint globalIndexStart;
-    uint uniqueVerticesStart;
-    uint localIndicesStart;
-};
+#include "common/constants.glsl"
 
 layout(set = SCENE_SET, binding = 0, std430) readonly buffer VertexBuffer {
     uvec4 Vertices[];

@@ -254,9 +254,10 @@ uint32_t Scene::addModel(const std::string& filename)
     std::vector<meshopt_Meshlet> meshlets(meshletBound);
     std::vector<unsigned int> meshletVertices(indexCount);
     std::vector<unsigned char> meshletTriangles(indexCount);
+    const float coneWeight = 0.25f; // recommended by meshoptimizer lib if cone-culling is used 
     meshlets.resize(meshopt_buildMeshlets(meshlets.data(), meshletVertices.data(), meshletTriangles.data(),
         model.indices.data(), indexCount, model.positions.data(), model.vertices.size(),
-        3 * sizeof(float), m_maxVerticesPerMeshlet, m_maxTrianglesPerMeshlet, 0.0f));
+        3 * sizeof(float), m_maxVerticesPerMeshlet, m_maxTrianglesPerMeshlet, coneWeight));
 
     // optimize each individual meshlet
     for (const auto& meshlet : meshlets) {
@@ -279,6 +280,8 @@ uint32_t Scene::addModel(const std::string& filename)
             3 * sizeof(float));
 
         meshlet.boundingSphere = glm::vec4(bounds.center[0], bounds.center[1], bounds.center[2], bounds.radius);
+        meshlet.coneAxisAngle = glm::vec4(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff);
+        meshlet.coneApex = glm::vec4(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2], 0);
     }
    
     // compute entire mesh bounding sphere
