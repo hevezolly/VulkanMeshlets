@@ -22,18 +22,22 @@ class BarrierManager {
 
 public:
     BarrierManager& enqueue(BufferStateHandle& buffer, ResourceState targetState) {
-        m_barriers.push_back({ 
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = buffer.m_state.stage,
-            .srcAccessMask = buffer.m_state.access,
-            .dstStageMask = targetState.stage,
-            .dstAccessMask = targetState.access,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .buffer = buffer.m_buffer,
-            .offset = 0,
-            .size = VK_WHOLE_SIZE
-        });
+
+        // treat VK_PIPELINE_STAGE_2_NONE as "uninitialized". Save state, but don't issue a barrier 
+        if (buffer.m_state.stage != VK_PIPELINE_STAGE_2_NONE) {
+            m_barriers.push_back({ 
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = buffer.m_state.stage,
+                .srcAccessMask = buffer.m_state.access,
+                .dstStageMask = targetState.stage,
+                .dstAccessMask = targetState.access,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = buffer.m_buffer,
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
 
         buffer.m_state = targetState;
 
@@ -41,6 +45,10 @@ public:
     }
 
     void barrier(VkCommandBuffer cmd) {
+
+        if (m_barriers.size() == 0) {
+            return;
+        }
 
         VkDependencyInfo dependency {
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

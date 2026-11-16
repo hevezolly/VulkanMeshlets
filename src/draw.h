@@ -82,7 +82,7 @@ private:
         vks::Buffer indirectDrawCommandsBuffer;
         vks::Buffer commandBuffer;
         vks::Buffer perInstanceWorkload;
-        vks::Buffer perMeshletWorkload;
+        vks::Buffer meshletInstances;
         std::vector<vks::Buffer> readbackBuffers;
     } m_buffers;
 
@@ -90,7 +90,7 @@ private:
         BufferStateHandle indirectDraw;
         BufferStateHandle commands;
         BufferStateHandle perInstance;
-        BufferStateHandle perMeshlet;
+        BufferStateHandle meshletInstance;
     } m_bufferState;
 
     struct {
@@ -155,6 +155,7 @@ private:
             &m_buffers.perInstanceWorkload, 
             sizeof(PerInstanceWorkload) * count
         ));
+        m_bufferState.perInstance = BufferStateHandle{m_buffers.perInstanceWorkload.buffer, {}};
     }
 
     void allocIndirectDrawCommands(uint32_t count) {
@@ -164,15 +165,17 @@ private:
             &m_buffers.indirectDrawCommandsBuffer, 
             sizeof(VkDrawIndexedIndirectCommand) * count
         ));
+        m_bufferState.indirectDraw = BufferStateHandle{m_buffers.indirectDrawCommandsBuffer.buffer, {}};
     }
 
-    void allocPerMeshletWorkload(uint32_t count) {
+    void allocMeshletInstances(uint32_t count) {
         VK_CHECK_RESULT(m_vulkanDevice->createBuffer(
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &m_buffers.perMeshletWorkload, 
+            &m_buffers.meshletInstances, 
             sizeof(PerMeshletWorkload) * count
         ));
+        m_bufferState.meshletInstance = BufferStateHandle{m_buffers.meshletInstances.buffer, {}};
     }
 
     void allocateBuffers(Scene& scene) {
@@ -194,6 +197,7 @@ private:
             &m_buffers.commandBuffer, 
             sizeof(Commands)
         ));
+        m_bufferState.commands = BufferStateHandle(m_buffers.commandBuffer.buffer, {});
 
         allocPerInstanceWorkload(MinMeshletWorkloads);
 
@@ -201,17 +205,8 @@ private:
             allocIndirectDrawCommands(MinIndirectCommands);
 
         } else {
-            allocPerMeshletWorkload(MinMeshletWorkloads);
-            uint32_t maxIndexCount = 3;
-            for (const auto& meshlet : scene.meshlets()) {
-                maxIndexCount = std::max(maxIndexCount, meshlet.indexCount);
-            }
-            // Each draw instance uses these indices as triangle-corner IDs.
-            std::vector<uint32_t> indices(maxIndexCount);
-            std::iota(indices.begin(), indices.end(), 0u);
+            allocMeshletInstances(MinMeshletWorkloads);
         }
-
-        
     }
 
     void writeCommonDescriptors(uint32_t frameId) {
@@ -229,7 +224,7 @@ private:
 
     void writeSingledrawDescriptors(uint32_t frameId) {
         m_sets.singleDraw[frameId].write({
-            m_buffers.perMeshletWorkload.descriptor,
+            m_buffers.meshletInstances.descriptor,
         });
     }
 
@@ -332,7 +327,7 @@ private:
 
     void setUpCapacityTracking() 
     {
-        constexpr uint32_t defaultShrinkDelay = 360;
+        constexpr uint32_t defaultShrinkDelay = 520;
         constexpr float defaultExcessFactor = 1.5;
         // ammortizing capacities of both command buffers and number of multi-draw commands.
 
@@ -348,7 +343,7 @@ private:
 
             // it costs nothing to change the number of commands, so make it a lot more responsive
             m_capacityTracking.indirectDrawCountController = CapacityController {
-                MinIndirectCommands, 0.85, 0.75, 10, 1.1
+                MinIndirectCommands, 0.85, 0.75, 240, 1.25
             };
         } else {
             
@@ -372,7 +367,7 @@ public:
         m_buffers.indirectDrawCommandsBuffer.destroy();
         m_buffers.commandBuffer.destroy();
         m_buffers.perInstanceWorkload.destroy();
-        m_buffers.perMeshletWorkload.destroy();
+        m_buffers.meshletInstances.destroy();
 
         m_destroyQueue.flush();
     }
@@ -552,11 +547,11 @@ public:
     {
         m_capacityTracking.instancesBufferController.update(commands.drawCommandCounter);
         
-        if (m_buffers.perMeshletWorkload.size != m_capacityTracking.instancesBufferController.capacity() * sizeof(PerMeshletWorkload)) 
+        if (m_buffers.meshletInstances.size != m_capacityTracking.instancesBufferController.capacity() * sizeof(PerMeshletWorkload)) 
         {
-            m_destroyQueue.enqueue(m_buffers.perMeshletWorkload);
+            m_destroyQueue.enqueue(m_buffers.meshletInstances);
 
-            allocPerMeshletWorkload(m_capacityTracking.instancesBufferController.capacity());
+            allocMeshletInstances(m_capacityTracking.instancesBufferController.capacity());
 
             m_singledrawBuffersDirty |= (1 << m_framesInFlight) - 1;
         }
@@ -596,63 +591,11 @@ public:
     }
 
 private:
-    void continueMultiDraw(
-        VkCommandBuffer cmd, 
-        uint32_t frameId, 
-        uint64_t frameIndex,
-        VkFramebuffer frameBuffer, 
-        VkExtent2D extent,
-        Scene& scene,
-        GpuScene& gpuScene
-    ) {
-        {
-            // clear indirect command buffer. Required, since I'm using drawInstancedIndirect, not drawInstancedIndirectCount
-            vkCmdFillBuffer(
-                cmd, m_buffers.indirectDrawCommandsBuffer.buffer, 0, VK_WHOLE_SIZE, 0
-            );
-
-            m_bufferState.indirectDraw = {m_buffers.indirectDrawCommandsBuffer.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                .access = VK_ACCESS_2_TRANSFER_WRITE_BIT
-            }};
-        }
+    void readBackCommands(VkCommandBuffer cmd, uint32_t frameId) {
 
         m_barriers
             .enqueue(m_bufferState.commands, {
-                .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            })
-            .enqueue(m_bufferState.perInstance, {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-            })
-            .enqueue(m_bufferState.indirectDraw, {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            })
-            .barrier(cmd);
-
-        {
-            // compute work with group count equal to the number of items in perInstanceWorkload,
-            // with group size equal to MeshletsProcessedPerGroup. 
-            // PerInstanceWorkload.meshletsCount can never surpass MeshletsProcessedPerGroup, so every meshlet is processed.
-            // MeshletsProcessedPerGroup must be selected carefully based on expected number of meshlets in a typical model, 
-            // so the work is balanced.
-            //
-            // m_pipelines.cullMeshletsMultidraw culls meshlets of visible instances and generates indirect draw commands. 
-            // Thanks to particular vertex and index buffer ordering, it is possible to combine adjesent meshlets into a single draw command.
-            
-            m_pipelines.cullMeshletsMultidraw.bind(cmd, m_sets.multiDraw[frameId], 2);
-            m_pipelines.cullMeshletsMultidraw.dispatchIndirect(cmd, m_buffers.commandBuffer.buffer);
-        }
-
-        m_barriers
-            .enqueue(m_bufferState.indirectDraw, {
-                .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT
-            })
-            .enqueue(m_bufferState.commands, {
-                .stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .stage = VK_PIPELINE_STAGE_2_COPY_BIT,
                 .access = VK_ACCESS_2_TRANSFER_READ_BIT
             })
             .barrier(cmd);
@@ -671,12 +614,91 @@ private:
             &region
         );
 
+        BufferStateHandle readback{
+            m_buffers.readbackBuffers[frameId].buffer,
+            {
+                .stage = VK_PIPELINE_STAGE_2_COPY_BIT,
+                .access = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            },
+        };
+
+        m_barriers.enqueue(readback, {
+            .stage = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .access = VK_ACCESS_2_HOST_READ_BIT,
+        }).barrier(cmd);
+    }
+
+    void continueMultiDraw(
+        VkCommandBuffer cmd, 
+        uint32_t frameId, 
+        uint64_t frameIndex,
+        VkFramebuffer frameBuffer, 
+        VkExtent2D extent,
+        Scene& scene,
+        GpuScene& gpuScene
+    ) {
         {
+            m_barriers
+                .enqueue(m_bufferState.indirectDraw, {
+                    .stage = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                    .access = VK_ACCESS_2_TRANSFER_WRITE_BIT
+                })
+                .barrier(cmd);
+
+            // clear indirect command buffer. Required, since drawInstancedIndirect is used, not drawInstancedIndirectCount
+            vkCmdFillBuffer(
+                cmd, m_buffers.indirectDrawCommandsBuffer.buffer, 0, VK_WHOLE_SIZE, 0
+            );
+        }
+
+        {
+
+            m_barriers
+                .enqueue(m_bufferState.commands, {
+                    .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .enqueue(m_bufferState.perInstance, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                })
+                .enqueue(m_bufferState.indirectDraw, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .barrier(cmd);
+
+            // compute work with group count equal to the number of items in perInstanceWorkload,
+            // with group size equal to MeshletsProcessedPerGroup. 
+            // PerInstanceWorkload.meshletsCount can never surpass MeshletsProcessedPerGroup, so every meshlet is processed.
+            // MeshletsProcessedPerGroup must be selected carefully based on expected number of meshlets in a typical model, 
+            // so the work is balanced.
+            //
+            // m_pipelines.cullMeshletsMultidraw culls meshlets of visible instances and generates indirect draw commands. 
+            // Thanks to particular vertex and index buffer ordering, it is possible to combine adjesent meshlets into a single draw command.
+            
+            m_pipelines.cullMeshletsMultidraw.bind(cmd, m_sets.multiDraw[frameId], 2);
+            m_pipelines.cullMeshletsMultidraw.dispatchIndirect(cmd, m_buffers.commandBuffer.buffer);
+        }
+
+        readBackCommands(cmd, frameId);
+
+        {
+            m_barriers
+                .enqueue(m_bufferState.indirectDraw, {
+                    .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                    .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT
+                })
+                .barrier(cmd);
+
+
             uint32_t drawCount = std::min(
                 m_capacityTracking.indirectDrawCountController.capacity(),
                 m_capacityTracking.indirectDrawBufferController.capacity() 
             );
-            // multi-draw inderect
+
+            // multi-draw inderect. Each command contains one or more meshlets, up to MeshletsProcessedPerGroup in the best case.
+            // empty commands are possible, but their number is minimized by using CapacityController's
             m_pipelines.multiDraw.beginPass(cmd, frameBuffer, extent, glm::vec3(m_environment.envColorIntensity));
             m_pipelines.multiDraw.bind(cmd, m_sets.scene, 0);
             m_pipelines.multiDraw.pushConstant(cmd, m_environment);
@@ -698,56 +720,44 @@ private:
         GpuScene& gpuScene
     ) {
 
-        m_barriers
-            .enqueue(m_bufferState.commands, {
-                .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            })
-            .enqueue(m_bufferState.perInstance, {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-            })
-            .barrier(cmd);
-
         {
+            m_barriers
+                .enqueue(m_bufferState.commands, {
+                    .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .enqueue(m_bufferState.perInstance, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                })
+                .enqueue(m_bufferState.meshletInstance, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .barrier(cmd);
+
             // compute work analogus to the multi-draw branch. Culls meshlets and
             // produces intermediate buffer with meshletId and instanceId correspondance.
 
             m_pipelines.cullMeshletsSingledraw.bind(cmd, m_sets.singleDraw[frameId], 2);
             m_pipelines.cullMeshletsSingledraw.dispatchIndirect(cmd, m_buffers.commandBuffer.buffer);
-
-            m_bufferState.perMeshlet = BufferStateHandle{m_buffers.perMeshletWorkload.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            }};
         }
 
-        m_barriers
-            .enqueue(m_bufferState.perMeshlet, {
-                .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-            })
-            .enqueue(m_bufferState.commands, {
-                .stage = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                .access = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT
-            })
-            .barrier(cmd);
-
-        VkBufferCopy region {
-            .srcOffset = 0,
-            .dstOffset = 0,
-            .size = sizeof(Commands)
-        };
-        
-        vkCmdCopyBuffer(
-            cmd,
-            m_buffers.commandBuffer.buffer,
-            m_buffers.readbackBuffers[frameId].buffer,
-            1,
-            &region
-        );
+        readBackCommands(cmd, frameId);
 
         {
+            m_barriers
+                .enqueue(m_bufferState.meshletInstance, {
+                    .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                })
+                .barrier(cmd);
+
+            // Indirect draw with a single command. Uses degenerate index buffer looking like [0, 1, 2, ..., n] where n
+            // is the maximum possible index count in a single meshlet. This draw is instanced for the number of visible meshlets.
+            // Vertex shader reads meshlet and instance ids and produces correct vertex based on gl_VertexIndex.
+            // Indices out of range result in invisible triangles. 
+    
             m_pipelines.singleDraw.beginPass(cmd, frameBuffer, extent, glm::vec3(m_environment.envColorIntensity));
             m_pipelines.singleDraw.bind(cmd, m_sets.scene, 0);
             m_pipelines.singleDraw.bind(cmd, m_sets.singleDraw[frameId], 1);
@@ -787,23 +797,20 @@ public:
         };
         
         {
-            // clear the commandBuffer
+            m_barriers
+                .enqueue(m_bufferState.commands, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .barrier(cmd);
+
+            // clear commands and counters
             m_pipelines.clearCommands.pushConstant(cmd, cullingSetup);
             m_pipelines.clearCommands.bind(cmd, m_sets.commonBuffers[frameId], 0);
             m_pipelines.clearCommands.bind(cmd, m_sets.scene, 1);
             m_pipelines.clearCommands.dispatch(cmd, 1);
-
-            m_bufferState.commands = {m_buffers.commandBuffer.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            }};
         }
         
-
-        m_barriers.enqueue(m_bufferState.commands, ResourceState {
-            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
-            .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-        }).barrier(cmd);
 
         {
             // compute work over all instances:
@@ -813,16 +820,22 @@ public:
             // a simpler algorithm is possible, but avoided by design:
             // It is possible to use the fact that we have only one model type in the scene, and cull meshlets straight-away,
             // calculating instance id by dispatchId % meshletCount.
-            // However this is only the case for this toy example and doesn't stand in real world, where many models are present.
-            // For this reason I've intentionally went for a more complex algorithm, that can support multiple models
+            // However this is only the case for this toy example and doesn't stand in real world, where many models are possible.
+            // For this reason a more complex algorithm was selected, that can support multiple models.
     
+            m_barriers
+                .enqueue(m_bufferState.commands, ResourceState {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .enqueue(m_bufferState.perInstance, ResourceState {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
+                    .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                })
+                .barrier(cmd);
+
             // don't rebind - pipelines are compatible
             m_pipelines.cullInstances.dispatch(cmd, (scene.instances().size() + DefaultGroupSize - 1) / DefaultGroupSize);
-
-            m_bufferState.perInstance = {m_buffers.perInstanceWorkload.buffer, ResourceState {
-                .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR,
-                .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-            }};
         }
 
         if (m_multidraw) {

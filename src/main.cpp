@@ -54,8 +54,11 @@ struct VulkanExample final : public VulkanExampleBase
 
     void getEnabledFeatures() override
     {
-        enabledFeatures.multiDrawIndirect = deviceFeatures.multiDrawIndirect;
-        enabledFeatures.drawIndirectFirstInstance = VK_TRUE;
+        bool multidrawSupported = deviceFeatures.multiDrawIndirect == VK_TRUE;
+        bool drawFirstInstanceSupported = deviceFeatures.drawIndirectFirstInstance == VK_TRUE;
+        // drawIndirectFirstInstance is used by multidraw path - disable multidraw if it is not supported
+        enabledFeatures.multiDrawIndirect = (multidrawSupported && drawFirstInstanceSupported) ? VK_TRUE : VK_FALSE;
+        enabledFeatures.drawIndirectFirstInstance = deviceFeatures.drawIndirectFirstInstance;
         features11.shaderDrawParameters = VK_TRUE;
 
         // want to use 1.3 for synchronization2

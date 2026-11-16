@@ -13,7 +13,7 @@ void main() {
     vec3 v = normalize(Env.cameraPosition.xyz - inPosition);
     vec3 n = normalize(inNormal);
 
-    vec3 dirLambertian = dot(n, normalize(Env.lightDirIntensity).xyz) * inColor * Env.lightDirIntensity.w;
+    vec3 dirLambertian = dot(n, normalize(Env.lightDirIntensity.xyz)) * Env.lightColor.xyz * inColor * Env.lightDirIntensity.w;
     vec3 ambient = Env.envColorIntensity.xyz * Env.envColorIntensity.w;
 
     outColor = vec4(dirLambertian + ambient, 1);
