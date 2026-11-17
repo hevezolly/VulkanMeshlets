@@ -14,25 +14,27 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb)
     target_compile_definitions(base PUBLIC VK_USE_PLATFORM_XCB_KHR)
-    target_link_libraries(base PkgConfig::XCB)
+    target_link_libraries(base PUBLIC PkgConfig::XCB)
 endif()
 target_include_directories(base
     PUBLIC
         base
         external/imgui
         external/ktx/include
-        ${Vulkan_INCLUDE_DIRS}
     PRIVATE
         external/meshoptimizer
         external/glm
         external/ktx/other_include
 )
 
-add_executable(VulkanMeshlets WIN32
+add_executable(VulkanMeshlets
     src/main.cpp
     src/scene.cpp
     src/scene.h
 )
+if(WIN32)
+    set_target_properties(VulkanMeshlets PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 target_include_directories(VulkanMeshlets PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/base"

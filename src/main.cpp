@@ -6,6 +6,7 @@
 #include "shader_loader.h"
 #include <random>
 #include <glm/gtx/color_space.hpp>
+#include "camera_view_control.h"
 
 constexpr const char* SINGLE_DRAW_ARG_NAME = "singleDraw";
 constexpr const char* SINGLE_DRAW_ARG = "--single-draw";
@@ -19,16 +20,13 @@ struct VulkanExample final : public VulkanExampleBase
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES
     };
 
-    VkPhysicalDeviceVulkan11Features features11{
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
-    };
-
     DescriptorPool descriptors{};
     Scene scene{128, 256};
     GpuScene gpuScene{};
     DrawSystem drawSystem{};
     ShaderLoader shaderLoader;
     uint64_t frameIndex{0};
+    CameraViewControl camera;
 
     VulkanExample(): shaderLoader(this)
     {
@@ -59,7 +57,6 @@ struct VulkanExample final : public VulkanExampleBase
         // drawIndirectFirstInstance is used by multidraw path - disable multidraw if it is not supported
         enabledFeatures.multiDrawIndirect = (multidrawSupported && drawFirstInstanceSupported) ? VK_TRUE : VK_FALSE;
         enabledFeatures.drawIndirectFirstInstance = deviceFeatures.drawIndirectFirstInstance;
-        features11.shaderDrawParameters = VK_TRUE;
 
         // want to use 1.3 for synchronization2
         if (deviceProperties.apiVersion < VK_API_VERSION_1_3) {
@@ -309,8 +306,17 @@ struct VulkanExample final : public VulkanExampleBase
         drawSystem.registerLayouts(device, maxConcurrentFrames, descriptors, useMultiDraw);
 
         descriptors.prepare(device);
-        
-        drawSystem.prepare(vulkanDevice, descriptors, gpuScene, scene, shaderLoader, depthFormat, swapChain.colorFormat);
+
+        drawSystem.prepare(
+            vulkanDevice, 
+            descriptors, 
+            gpuScene, 
+            scene, 
+            shaderLoader, 
+            depthFormat, 
+            swapChain.colorFormat,
+            deviceProperties.limits
+        );
 
         prepared = true;
     }
@@ -330,13 +336,13 @@ struct VulkanExample final : public VulkanExampleBase
 
     void keyStateChanged(uint32_t key, bool pressed) override
     {
-        using CameraKey = DrawSystem::CameraKey;
+        using CameraKey = CameraViewControl::CameraKey;
         switch (key) {
-        case KEY_W: drawSystem.setCameraKey(CameraKey::Forward, pressed); break;
-        case KEY_S: drawSystem.setCameraKey(CameraKey::Backward, pressed); break;
-        case KEY_A: drawSystem.setCameraKey(CameraKey::Left, pressed); break;
-        case KEY_D: drawSystem.setCameraKey(CameraKey::Right, pressed); break;
-        case KEY_SPACE: drawSystem.setCameraKey(CameraKey::Up, pressed); break;
+        case KEY_W: camera.setCameraKey(CameraKey::Forward, pressed); break;
+        case KEY_S: camera.setCameraKey(CameraKey::Backward, pressed); break;
+        case KEY_A: camera.setCameraKey(CameraKey::Left, pressed); break;
+        case KEY_D: camera.setCameraKey(CameraKey::Right, pressed); break;
+        case KEY_SPACE: camera.setCameraKey(CameraKey::Up, pressed); break;
 #if defined(_WIN32)
         case VK_CONTROL:
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
@@ -347,7 +353,7 @@ struct VulkanExample final : public VulkanExampleBase
         case 0x69: // Right Control in the default X11 keymap.
 #endif
 #if defined(_WIN32) || defined(VK_USE_PLATFORM_WAYLAND_KHR) || defined(VK_USE_PLATFORM_XCB_KHR)
-            drawSystem.setCameraKey(CameraKey::Down, pressed);
+            camera.setCameraKey(CameraKey::Down, pressed);
             break;
 #endif
         default:
@@ -357,7 +363,7 @@ struct VulkanExample final : public VulkanExampleBase
 
     void inputFocusLost() override
     {
-        drawSystem.clearCameraKeys();
+        camera.clearCameraKeys();
     }
 
     void mouseMoved(double x, double y, bool& handled) override
@@ -365,7 +371,7 @@ struct VulkanExample final : public VulkanExampleBase
         if (handled || !mouseState.buttons.right) {
             return;
         }
-        drawSystem.rotateCamera(static_cast<float>(x) - mouseState.position.x,
+        camera.rotateCamera(static_cast<float>(x) - mouseState.position.x,
             static_cast<float>(y) - mouseState.position.y);
         handled = true;
     }
@@ -389,8 +395,17 @@ struct VulkanExample final : public VulkanExampleBase
         auto commandBuffer = drawCmdBuffers[currentBuffer];
         VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginInfo));
         {
-            drawSystem.updateCamera(frameTimer);
-            drawSystem.beginDraw(commandBuffer, currentBuffer, frameIndex, frameBuffers[currentImageIndex], {width, height}, scene, gpuScene);
+            camera.updateCamera(frameTimer);
+            drawSystem.beginDraw(
+                commandBuffer, 
+                currentBuffer, 
+                frameIndex, 
+                frameBuffers[currentImageIndex], 
+                {width, height}, 
+                scene, 
+                gpuScene,
+                camera.calculateView()
+            );
             VulkanExampleBase::drawUI(commandBuffer);
             drawSystem.endDraw(commandBuffer);
         }

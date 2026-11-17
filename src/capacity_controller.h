@@ -5,6 +5,7 @@ class CapacityController
     uint32_t m_capacity = 1024;
     uint32_t m_lowUsageFrames = 0;
     uint32_t m_maxLow = 0;
+    uint32_t m_maxCapacity = 0xFFFFFFFF;
     float m_growThreshold = 0.85f;
     float m_shrinkThreshold = 0.35f;
     uint32_t m_shrinkDelay = 120;
@@ -18,13 +19,21 @@ public:
     }
 
     CapacityController() {}
-    CapacityController(uint32_t minCapacity, float growThreshold, float shrinkThreshold, uint32_t shrinkDelay, float excessFactor): 
+    CapacityController(
+        uint32_t minCapacity, 
+        float growThreshold, 
+        float shrinkThreshold, 
+        uint32_t shrinkDelay, 
+        float excessFactor,
+        uint32_t maxCapacity = 0xFFFFFFFF
+    ): 
         m_capacity(minCapacity), 
         m_minCapacity(minCapacity), 
         m_growThreshold(growThreshold), 
         m_shrinkThreshold(shrinkThreshold),
         m_shrinkDelay(shrinkDelay),
-        m_excessFactor(excessFactor)
+        m_excessFactor(excessFactor),
+        m_maxCapacity(maxCapacity)
     {} 
 
     void update(uint32_t recentPeak)

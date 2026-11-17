@@ -14,6 +14,7 @@
 #include "capacity_controller.h"
 #include "delayed_destroy_queue.h"
 #include "barriers.h"
+#include "camera_view_control.h"
 
 constexpr uint32_t DefaultGroupSize = 64;
 
@@ -57,12 +58,6 @@ struct Commands {
 };
 
 class DrawSystem {
-public:
-    enum class CameraKey { Forward, Backward, Left, Right, Up, Down, Count };
-
-private:
-    static inline const glm::vec3 WorldUp{0.0f, 1.0f, 0.0f};
-    
     
     struct {
         DescriptorSetLayout commonBuffers;
@@ -116,13 +111,12 @@ private:
     } m_pipelines;
 
     struct {
-        glm::vec3 cameraPosition{0.5f, 0.5f, 0.5f};
-        glm::vec3 cameraForward = glm::normalize(glm::vec3{0., 0.3, 0.} - cameraPosition);
         float fov = 45.0f;
-
+        
         glm::mat4 viewProjection{1.0f};
-
         glm::mat4 cullViewProjection{1.0f};
+        
+        glm::vec3 cameraPosition{0.5f, 0.5f, 0.5f};
         glm::vec3 cullCameraPosition{0.5f, 0.5f, 0.5f};
         bool freezeFrustumCull = false;
     } m_cameraData;
@@ -135,7 +129,8 @@ private:
     
     Commands m_readbackCommands;
 
-    std::array<bool, static_cast<size_t>(CameraKey::Count)> m_cameraKeys{};
+    uint32_t m_maxGroupCount;
+    uint32_t m_maxIndirectCommands;
 
     uint32_t m_framesInFlight;
     VkDevice m_device;
@@ -332,18 +327,18 @@ private:
         // ammortizing capacities of both command buffers and number of multi-draw commands.
 
         m_capacityTracking.perInstanceWorkloadController = CapacityController {
-            MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
+            MinMeshletWorkloads, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor, m_maxGroupCount
         };
 
         if (m_multidraw) {
 
             m_capacityTracking.indirectDrawBufferController = CapacityController {
-                MinIndirectCommands, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor
+                MinIndirectCommands, 0.85, 0.35, defaultShrinkDelay, defaultExcessFactor, m_maxIndirectCommands
             };
 
             // it costs nothing to change the number of commands, so make it a lot more responsive
             m_capacityTracking.indirectDrawCountController = CapacityController {
-                MinIndirectCommands, 0.85, 0.75, 240, 1.25
+                MinIndirectCommands, 0.85, 0.75, 240, 1.25, m_maxIndirectCommands
             };
         } else {
             
@@ -422,9 +417,12 @@ public:
         Scene& scene,
         const ShaderLoader& shaderLoader,
         VkFormat dsFormat,
-        VkFormat colorFormat
+        VkFormat colorFormat,
+        VkPhysicalDeviceLimits limits
     ) {
         m_vulkanDevice = vulkanDevice;
+        m_maxGroupCount = limits.maxComputeWorkGroupCount[0];
+        m_maxIndirectCommands = limits.maxDrawIndirectCount;
 
         allocateBuffers(scene);
         allocateDescriptors(descriptors, gpuScene);
@@ -468,52 +466,12 @@ public:
         }
     }
 
-    void setCameraKey(CameraKey key, bool pressed)
+    void applyCamereaParameters(View view, VkExtent2D extent) 
     {
-        m_cameraKeys[static_cast<size_t>(key)] = pressed;
-    }
-
-    void clearCameraKeys()
-    {
-        m_cameraKeys.fill(false);
-    }
-
-    void rotateCamera(float dx, float dy)
-    {
-        constexpr float sensitivity = 0.003f;
-        const float pitchLimit = glm::radians(89.0f);
-        const auto& forward = m_cameraData.cameraForward;
-        const float yaw = std::atan2(forward.z, forward.x) + dx * sensitivity;
-        const float pitch = std::clamp(std::asin(std::clamp(forward.y, -1.0f, 1.0f)) - dy * sensitivity,
-            -pitchLimit, pitchLimit);
-        m_cameraData.cameraForward = glm::vec3(
-            std::cos(pitch) * std::cos(yaw), std::sin(pitch), std::cos(pitch) * std::sin(yaw));
-    }
-
-    void updateCamera(float deltaTime)
-    {
-        const auto axis = [this](CameraKey positive, CameraKey negative) {
-            return float(m_cameraKeys[static_cast<size_t>(positive)]) -
-                float(m_cameraKeys[static_cast<size_t>(negative)]);
-        };
-        const glm::vec3 forward = m_cameraData.cameraForward;
-        const glm::vec3 right = glm::normalize(glm::cross(forward, WorldUp));
-        const glm::vec3 movement = forward * axis(CameraKey::Forward, CameraKey::Backward) +
-            right * axis(CameraKey::Right, CameraKey::Left) + WorldUp * axis(CameraKey::Up, CameraKey::Down);
-        if (glm::dot(movement, movement) > 0.0f) {
-            constexpr float moveSpeed = 0.5f;
-            m_cameraData.cameraPosition += glm::normalize(movement) * moveSpeed * std::min(deltaTime, 0.1f);
-        }
-    }
-
-    void applyCamereaParameters(uint32_t frameId, VkExtent2D extent) 
-    {
-        // just hardcode in some parameters
-        const glm::vec3 position = m_cameraData.cameraPosition;
-        const glm::mat4 view = glm::lookAt(position, position + m_cameraData.cameraForward, WorldUp);
+        m_cameraData.cameraPosition = view.position;
         glm::mat4 projection = glm::perspective(glm::radians(m_cameraData.fov), extent.width / (float) extent.height, 0.1f, 25.0f);
         projection[1][1] *= -1;
-        m_cameraData.viewProjection = projection * view;
+        m_cameraData.viewProjection = projection * view.view;
 
         if (!m_cameraData.freezeFrustumCull) {
             m_cameraData.cullViewProjection = m_cameraData.viewProjection;
@@ -778,10 +736,11 @@ public:
         VkFramebuffer frameBuffer, 
         VkExtent2D extent,
         Scene& scene,
-        GpuScene& gpuScene
+        GpuScene& gpuScene,
+        View view
     ) {
         m_destroyQueue.pump(frameId);
-        applyCamereaParameters(frameId, extent);
+        applyCamereaParameters(view, extent);
 
         // skip first cycle of frames in flight as at that time there is nothing to read back
         if (frameId != frameIndex) {
