@@ -93,6 +93,8 @@ Simpler algorithm is possible, but intentionally avoided: It is possible to take
 ### CPU side overview
 The project relies havily on [Sascha Willems Vulkan example](https://github.com/SaschaWillems/Vulkan/blob/master/examples/gltfloading/gltfloading.cpp). Cross-frame synchronization, device, swapchain, depth target, frame buffer and command lists and resource creation is borrowed from it (there is nothing particularly interesting to do with them in the scope of the task - most of them would've been just the most basic implementation). Ui and input are also used from the examples.
 
+My own code is located in `src`, `cmake` and `shader_sources`. `base` and `external` are third-party.
+
 Parts that were implemented on CPU side and worth mentioning: 
 - simple descriptor sets and layouts management
 - compute and graphics passes cration and usage
