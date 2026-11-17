@@ -111,6 +111,9 @@ There are things that were not implemented or iterated on due to the scope of th
 - cpu side memory management:
   The project doesn't use any custom allocators (pooling or arena) for transient memory. Instead `std::vector` is often used, which causes unnecessary heap allocations.
   Adding allocators with less overhead can also prove usefull.
+- better shader build system:
+  In the current version shaders are built by an outside process. Due to this common parts of shaders are duplicated, and some constants must be manually matched to the cpu counterparts. 
+  With integrated shader build system both issues can be avoided.
 
 ### Example
 full version: https://youtu.be/X36Q5upHMVA
