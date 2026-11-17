@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(VulkanMeshlets LANGUAGES C CXX)
 
+option(CMAKE_SHADERS_O0 "Disable GLSL shader optimization" OFF)
+
 find_package(Vulkan REQUIRED)
 add_subdirectory(base)
 add_subdirectory(external/meshoptimizer EXCLUDE_FROM_ALL)
@@ -47,6 +49,7 @@ add_custom_target(VulkanMeshletsShaders
     COMMAND "${CMAKE_COMMAND}"
         "-DSHADER_PROJECT_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DSHADER_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DCMAKE_SHADERS_O0:BOOL=${CMAKE_SHADERS_O0}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompileShaders.cmake"
     COMMENT "Preparing GLSL shaders"
     VERBATIM

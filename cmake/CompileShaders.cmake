@@ -6,6 +6,12 @@ if(NOT GLSLC_EXECUTABLE)
     return()
 endif()
 
+if(CMAKE_SHADERS_O0)
+    set(shader_optimization -O0)
+else()
+    set(shader_optimization -O)
+endif()
+
 file(REAL_PATH "${SHADER_PROJECT_DIR}" project_dir)
 file(REAL_PATH "${SHADER_BUILD_DIR}" build_dir)
 set(source_dir "${project_dir}/shader_sources")
@@ -51,7 +57,7 @@ foreach(shader IN LISTS shader_files)
     get_filename_component(compiled_directory "${compiled_shader}" DIRECTORY)
     file(MAKE_DIRECTORY "${compiled_directory}")
     execute_process(
-        COMMAND "${GLSLC_EXECUTABLE}" -x glsl -I "${source_dir}"
+        COMMAND "${GLSLC_EXECUTABLE}" "${shader_optimization}" -x glsl -I "${source_dir}"
             -c "${source_dir}/${shader}" -o "${compiled_shader}"
         RESULT_VARIABLE result
     )

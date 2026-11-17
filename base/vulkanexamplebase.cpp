@@ -845,7 +845,7 @@ VulkanExampleBase::VulkanExampleBase()
 	commandLineParser.add("width", { "-w", "--width" }, 1, "Set window width");
 	commandLineParser.add("height", { "-h", "--height" }, 1, "Set window height");
 	commandLineParser.add("shaders", { "-s", "--shaders" }, 1, "Select shader type to use (gls, hlsl or slang)");
-	commandLineParser.add("gpuselection", { "-g", "--gpu" }, 1, "Select GPU to run on");
+	commandLineParser.add("gpuselection", { "-g", "--gpu" }, 1, "Select GPU by index (prefers a discrete GPU by default)");
 	commandLineParser.add("gpulist", { "-gl", "--listgpus" }, 0, "Display a list of available Vulkan devices");
 	commandLineParser.add("benchmark", { "-b", "--benchmark" }, 0, "Run example in benchmark mode");
 	commandLineParser.add("benchmarkwarmup", { "-bw", "--benchwarmup" }, 1, "Set warmup time for benchmark mode in seconds");
@@ -1115,18 +1115,31 @@ bool VulkanExampleBase::initVulkan()
 
 	// GPU selection
 
-	// Select physical device to be used for the Vulkan example
-	// Defaults to the first device unless specified by command line
 	uint32_t selectedDevice = 0;
 
 #if !defined(VK_USE_PLATFORM_ANDROID_KHR) && !defined(VK_USE_PLATFORM_OHOS)
 	// GPU selection via command line argument
 	if (commandLineParser.isSet("gpuselection")) {
 		uint32_t index = commandLineParser.getValueAsInt("gpuselection", 0);
-		if (index > gpuCount - 1) {
-			std::cerr << "Selected device index " << index << " is out of range, reverting to device 0 (use -listgpus to show available Vulkan devices)" << "\n";
+		if (index >= gpuCount) {
+			std::cerr << "Selected device index " << index << " is out of range, reverting to device 0 (use --listgpus to show available Vulkan devices)" << "\n";
 		} else {
 			selectedDevice = index;
+		}
+	} else {
+		// Preserve enumeration order among devices of the same type.
+		bool foundIntegratedGpu = false;
+		for (uint32_t i = 0; i < gpuCount; i++) {
+			VkPhysicalDeviceProperties properties{};
+			vkGetPhysicalDeviceProperties(physicalDevices[i], &properties);
+			if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+				selectedDevice = i;
+				break;
+			}
+			if (!foundIntegratedGpu && properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+				selectedDevice = i;
+				foundIntegratedGpu = true;
+			}
 		}
 	}
 	if (commandLineParser.isSet("gpulist")) {
